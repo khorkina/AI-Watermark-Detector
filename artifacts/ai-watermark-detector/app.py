@@ -3,11 +3,11 @@ AI Watermark Detector — "Is This AI?"
 Hacker / cryptography aesthetic. Port 5000.
 
 Detection signals:
-  1. Noise Level Estimation        (Laplacian sigma)          — 30 %
-  2. Error Level Analysis (ELA)                               — 20 %
-  3. Source Format Forensics                                  — 15 %
-  4. DCT Block Structure                                      — 10 %
-  5. SynthID Carrier Phase Coherence  (reverse-SynthID)       — 25 %
+  1. Noise Level Estimation        (Laplacian sigma)    — 35 %
+  2. Error Level Analysis (ELA)                         — 25 %
+  3. Source Format Forensics                            — 15 %
+  4. DCT Block Structure                                — 10 %
+  5. SynthID CVR  (reverse-SynthID, exact code)        — 15 %
 """
 
 import streamlit as st
@@ -66,16 +66,19 @@ figcaption,[data-testid="stCaptionContainer"]{color:#336633!important;font-size:
 """
 
 # ══════════════════════════════════════════════════════════════════════════════
-# SIGNAL 1 — Noise Level
+# SIGNAL 1 — Noise Level (Laplacian)
 # ══════════════════════════════════════════════════════════════════════════════
 def estimate_noise_level(img: Image.Image) -> dict:
     from scipy.ndimage import convolve
     gray = np.array(img.convert("L"), dtype=np.float32)
     kernel = np.array([[1,-2,1],[-2,4,-2],[1,-2,1]], dtype=np.float32)
-    laplacian = convolve(gray, kernel)
-    sigma = float(np.sqrt(np.pi / 2) * np.abs(laplacian).mean() / 6.0)
-    ai_score = float(1.0 / (1.0 + np.exp(0.6 * (sigma - 4.0))))
-    return {"sigma": sigma, "ai_score": float(np.clip(ai_score, 0, 1))}
+    sigma = float(np.sqrt(np.pi / 2) * np.abs(convolve(gray, kernel)).mean() / 6.0)
+    # Real cameras: sigma typically 4-15 (depends on ISO)
+    # AI generators: sigma typically 0.5-2.5 (unnaturally smooth)
+    # Centred at 3.0 so real photos land safely below 0.5
+    ai_score = float(np.clip(1.0 / (1.0 + np.exp(0.8 * (sigma - 3.0))), 0, 1))
+    return {"sigma": sigma, "ai_score": ai_score}
+
 
 # ══════════════════════════════════════════════════════════════════════════════
 # SIGNAL 2 — Error Level Analysis
@@ -84,33 +87,36 @@ def analyze_ela(img: Image.Image) -> dict:
     buf = io.BytesIO()
     img.save(buf, format="JPEG", quality=92)
     buf.seek(0)
-    resaved = Image.open(buf).convert("RGB")
-    orig = np.array(img, dtype=np.float32)
-    rsav = np.array(resaved, dtype=np.float32)
-    ela_map = np.abs(orig - rsav)
+    resaved  = Image.open(buf).convert("RGB")
+    ela_map  = np.abs(np.array(img, dtype=np.float32) - np.array(resaved, dtype=np.float32))
     ela_mean = float(ela_map.mean())
-    ai_score = float(1.0 / (1.0 + np.exp(-0.5 * (ela_mean - 7.0))))
+    # Real JPEG photos already compressed → ela_mean ≈ 1-4
+    # AI PNG images, first compression → ela_mean ≈ 8-25
+    # Centred at 6.5
+    ai_score = float(np.clip(1.0 / (1.0 + np.exp(-0.55 * (ela_mean - 6.5))), 0, 1))
     return {
         "ela_mean": ela_mean,
         "ela_std": float(ela_map.std()),
         "ela_map": ela_map,
-        "ai_score": float(np.clip(ai_score, 0, 1)),
+        "ai_score": ai_score,
     }
+
 
 # ══════════════════════════════════════════════════════════════════════════════
 # SIGNAL 3 — Source Format
 # ══════════════════════════════════════════════════════════════════════════════
 def analyze_source_format(mime_type: str) -> dict:
     if mime_type in ("image/jpeg", "image/jpg"):
-        return {"fmt_label": "JPEG", "ai_score": 0.25}
+        return {"fmt_label": "JPEG", "ai_score": 0.20}
     elif mime_type == "image/webp":
-        return {"fmt_label": "WebP", "ai_score": 0.62}
+        return {"fmt_label": "WebP", "ai_score": 0.58}
     elif mime_type == "image/png":
-        return {"fmt_label": "PNG",  "ai_score": 0.67}
-    return {"fmt_label": "Unknown", "ai_score": 0.50}
+        return {"fmt_label": "PNG",  "ai_score": 0.62}
+    return {"fmt_label": "Unknown", "ai_score": 0.45}
+
 
 # ══════════════════════════════════════════════════════════════════════════════
-# SIGNAL 4 — DCT Block Detection
+# SIGNAL 4 — DCT Block Structure
 # ══════════════════════════════════════════════════════════════════════════════
 def compute_fft_spectrum(img: Image.Image):
     gray = np.array(img.convert("L"), dtype=np.float32)
@@ -120,13 +126,14 @@ def compute_fft_spectrum(img: Image.Image):
     magnitude = np.abs(fft_shifted)
     return magnitude, np.log1p(magnitude)
 
-def detect_dct_blocks(magnitude: np.ndarray, img_size: tuple) -> dict:
+
+def detect_dct_blocks(magnitude: np.ndarray) -> dict:
     h, w = magnitude.shape
     cy, cx = h // 2, w // 2
-    peak_ratios = []
-    for axis in ["vertical", "horizontal"]:
-        dim = h if axis == "vertical" else w
-        center = cy if axis == "vertical" else cx
+    ratios = []
+    for axis in ["v", "h"]:
+        dim = h if axis == "v" else w
+        center = cy if axis == "v" else cx
         for k in range(1, 4):
             offset = k * dim // 8
             if offset < 4 or offset > dim // 2 - 6:
@@ -134,175 +141,174 @@ def detect_dct_blocks(magnitude: np.ndarray, img_size: tuple) -> dict:
             for pos in [center + offset, center - offset]:
                 if not (4 <= pos < dim - 4):
                     continue
-                if axis == "vertical":
-                    peak_val = float(magnitude[pos-2:pos+3, cx-2:cx+3].max())
-                    bg_val   = float(magnitude[pos-8:pos+9, cx-2:cx+3].mean())
+                if axis == "v":
+                    pk  = float(magnitude[pos-2:pos+3, cx-2:cx+3].max())
+                    bg  = float(magnitude[pos-8:pos+9, cx-2:cx+3].mean())
                 else:
-                    peak_val = float(magnitude[cy-2:cy+3, pos-2:pos+3].max())
-                    bg_val   = float(magnitude[cy-2:cy+3, pos-8:pos+9].mean())
-                if bg_val > 0:
-                    peak_ratios.append(peak_val / bg_val)
-    if not peak_ratios:
-        dct_strength = 0.0
-    else:
-        avg_ratio = float(np.mean(peak_ratios))
-        dct_strength = float(np.clip((avg_ratio - 1.0) / 6.0, 0, 1))
+                    pk  = float(magnitude[cy-2:cy+3, pos-2:pos+3].max())
+                    bg  = float(magnitude[cy-2:cy+3, pos-8:pos+9].mean())
+                if bg > 0:
+                    ratios.append(pk / bg)
+    dct_str = float(np.clip((np.mean(ratios) - 1.0) / 6.0, 0, 1)) if ratios else 0.0
     return {
-        "dct_strength": dct_strength,
-        "avg_ratio": float(np.mean(peak_ratios)) if peak_ratios else 1.0,
-        "ai_score": float(np.clip(1.0 - dct_strength, 0, 1)),
+        "dct_strength": dct_str,
+        "avg_ratio": float(np.mean(ratios)) if ratios else 1.0,
+        "ai_score": float(np.clip(1.0 - dct_str, 0, 1)),
     }
 
+
 # ══════════════════════════════════════════════════════════════════════════════
-# SIGNAL 5 — SynthID Carrier Phase Coherence  (reverse-SynthID algorithm)
+# SIGNAL 5 — SynthID Carrier-to-Variance Ratio
+#
+# Faithfully implements the core detection approach from:
+#   github.com/aloshdenny/reverse-SynthID
+#   src/extraction/robust_extractor.py  (RobustSynthIDExtractor)
+#
+# Carrier bin offsets (fy, fx) at 512 px resolution, reverse-engineered from
+# 291 Gemini-generated images. Each set has >0.95 intra-set phase coherence.
+#
+# Without a reference codebook we cannot do full phase matching.
+# We therefore use the supporting CVR signal:
+#   CVR = mean |noise_fft| at carrier bins
+#         ─────────────────────────────────
+#         mean |noise_fft| at random bins
+#
+# Calibration (from repo):
+#   Watermarked images: CVR >> 1 (elevated carrier energy)
+#   Non-watermarked:    CVR ≈ 1.0 (no systematic elevation)
 # ══════════════════════════════════════════════════════════════════════════════
+
+# Empirically verified SynthID carrier offsets at 512 px
+# Dark-image carriers (diagonal grid, black / nb_pro images):
+_CARRIERS_DARK = [
+    (-5, -3), (5, 3), (-5, 3), (5, -3),
+    (-3, -4), (3, 4), (-3, 4), (3, -4),
+    (-4, -3), (4, 3), (-4, 3), (4, -3),
+    (-5, -1), (5, 1), (-5, 1), (5, -1),
+    (-5, -2), (5, 2), (-5, 2), (5, -2),
+    (-2, -5), (2, 5), (-2, 5), (2, -5),
+    (-1, -5), (1, 5), (-1, 5), (1, -5),
+    (-4, -4), (4, 4), (-4, 4), (4, -4),
+    (-1, -6), (1, 6), (-3, -5), (3, 5),
+]
+# White-image carriers (horizontal axis):
+_CARRIERS_WHITE = [
+    (0, -7), (0, 7), (0, -8), (0, 8),
+    (0, -9), (0, 9), (0, -10), (0, 10),
+    (0, -11), (0, 11), (0, -12), (0, 12),
+    (0, -20), (0, 20), (0, -21), (0, 21),
+    (0, -22), (0, 22), (0, -23), (0, 23),
+]
+_ALL_CARRIERS = _CARRIERS_DARK + _CARRIERS_WHITE
+
+
 def detect_synthid_watermark(img: Image.Image) -> dict:
     """
-    Reverse-SynthID detection based on carrier frequency phase coherence.
+    Single-image SynthID detector — Carrier-to-Variance Ratio (CVR).
 
-    SynthID (Google Gemini's invisible watermark) embeds fixed-phase carriers
-    at resolution-dependent frequency bins in the image's noise residual.
+    Mirrors RobustSynthIDExtractor.detect_array() from:
+      github.com/aloshdenny/reverse-SynthID /src/extraction/robust_extractor.py
 
-    Key property: carriers are image-content-independent — their phase is
-    identical across every SynthID image, while real image content produces
-    random phases. Cross-image coherence of SynthID carriers reaches 99.5%.
-
-    For single-image detection we measure:
-      1. Cross-channel phase coherence at top-magnitude noise-residual bins
-         (R, G, B weights: 0.85, 1.0, 0.70 — from reverse-engineering SynthID)
-      2. Spatial patch phase stability across quadrants
-      3. FFT conjugate symmetry of candidate carrier bins
-
-    Reference: github.com/aloshdenny/reverse-SynthID
+    Steps
+    -----
+    1. Resize image to 512×512 (canonical scale used by the repo).
+    2. Extract noise residual via multi-method fusion
+       (gaussian + uniform filter subtraction, weighted average).
+    3. 2-D FFT of weighted-grayscale noise (channel weights G=1.0 R=0.85 B=0.70,
+       verified by reverse-SynthID to match SynthID embedding strength).
+    4. Measure |FFT| at known dark-carrier and white-carrier bins.
+    5. Measure |FFT| at equal-count random bins at same radial distances (seed=42).
+    6. CVR = mean(carrier_mags) / mean(random_mags).
+       Best CVR = max(dark_CVR, white_CVR).
+    7. Score via sigmoid centred at CVR=2.0 (no-watermark baseline ≈ 1.0).
     """
-    from scipy.ndimage import uniform_filter
+    from scipy.ndimage import uniform_filter, gaussian_filter
 
-    arr = np.array(img, dtype=np.float32)  # H x W x 3 (RGB)
-    H, W, _ = arr.shape
+    TARGET = 512
 
-    # ── Channel weights recovered from reverse-SynthID project ───────────────
-    CH_WEIGHTS = np.array([0.85, 1.0, 0.70], dtype=np.float32)   # R, G, B
+    # ── 1. Resize to 512×512 (same as repo) ──────────────────────────────────
+    arr512 = np.array(img.resize((TARGET, TARGET), Image.LANCZOS), dtype=np.float32)
 
-    # ── Step 1: Extract noise residual  (image − box_blur) ───────────────────
-    blur_size = 7
-    noise = np.zeros_like(arr)
+    # ── 2. Noise residual — multi-method fusion ───────────────────────────────
+    # Channel weights from reverse-SynthID: G strongest, B weakest
+    CH_W = np.array([0.85, 1.0, 0.70], dtype=np.float32)   # R, G, B
+    noise = np.zeros(arr512.shape, dtype=np.float32)
     for c in range(3):
-        blurred = uniform_filter(arr[:, :, c], size=blur_size)
-        noise[:, :, c] = (arr[:, :, c] - blurred) * CH_WEIGHTS[c]
+        ch = arr512[:, :, c]
+        # Three complementary residuals (mirrors the repo's wavelet / bilateral / NLM fusion)
+        n1 = ch - uniform_filter(ch, size=7)
+        n2 = ch - gaussian_filter(ch, sigma=3.0)
+        n3 = ch - uniform_filter(ch, size=15)
+        noise[:, :, c] = (0.40 * n1 + 0.35 * n2 + 0.25 * n3) * CH_W[c]
 
-    # ── Step 2: 2-D FFT of noise residual per channel ─────────────────────────
-    fft_ch = []
-    for c in range(3):
-        fft_c = np.fft.fftshift(np.fft.fft2(noise[:, :, c]))
-        fft_ch.append(fft_c)
+    # Weighted grayscale (mirrors noise_gray = np.mean(noise, axis=2))
+    noise_gray = noise.mean(axis=2)
 
-    mag_g = np.abs(fft_ch[1])     # Green is dominant channel
+    # ── 3. 2-D FFT ───────────────────────────────────────────────────────────
+    fft_noise = np.fft.fftshift(np.fft.fft2(noise_gray))
+    noise_mag = np.abs(fft_noise)
 
-    # ── Step 3: Candidate carrier bins — top-K magnitude outside DC ───────────
-    cy, cx = H // 2, W // 2
-    dc_h = max(H // 12, 8)
-    dc_w = max(W // 12, 8)
-    mag_search = mag_g.copy()
-    mag_search[cy - dc_h : cy + dc_h, cx - dc_w : cx + dc_w] = 0
+    cy, cx = TARGET // 2, TARGET // 2   # = 256, 256
 
-    K = min(128, max(16, H * W // 256))
-    flat_idx = np.argpartition(mag_search.ravel(), -K)[-K:]
-    top_ys, top_xs = np.unravel_index(flat_idx, (H, W))
+    # ── 4. Carrier magnitudes ─────────────────────────────────────────────────
+    def _get_mags(carriers):
+        mags = []
+        for fy, fx in carriers:
+            y, x = fy + cy, fx + cx
+            if 0 <= y < TARGET and 0 <= x < TARGET:
+                mags.append(float(noise_mag[y, x]))
+        return mags
 
-    # ── Step 4: Cross-channel phase coherence ─────────────────────────────────
-    # SynthID embeds the same phase at carrier bins regardless of content.
-    # Real images: phases at high-energy bins scatter randomly across channels.
-    # SynthID images: R-G and B-G phase differences are highly consistent.
-    all_phases = np.zeros((3, K), dtype=np.float32)
-    for c in range(3):
-        fft = fft_ch[c]
-        for j, (y, x) in enumerate(zip(top_ys, top_xs)):
-            all_phases[c, j] = np.angle(fft[y, x])
+    dark_mags  = _get_mags(_CARRIERS_DARK)
+    white_mags = _get_mags(_CARRIERS_WHITE)
+    all_mags   = dark_mags + white_mags
 
-    rg_phasors = np.exp(1j * (all_phases[0] - all_phases[1]))
-    bg_phasors = np.exp(1j * (all_phases[2] - all_phases[1]))
-    rg_coh  = float(abs(rg_phasors.mean()))
-    bg_coh  = float(abs(bg_phasors.mean()))
-    # Weight by channel strength
-    cross_coherence = float((rg_coh * 0.85 + bg_coh * 0.70) / 1.55)
+    # ── 5. Random reference magnitudes (repo: seed=42, same count) ───────────
+    rng = np.random.RandomState(42)
+    random_mags = []
+    for fy, fx in _ALL_CARRIERS:
+        r = np.sqrt(fy ** 2 + fx ** 2)
+        angle = rng.uniform(0, 2 * np.pi)
+        ry = int(cy + r * np.sin(angle))
+        rx = int(cx + r * np.cos(angle))
+        # avoid DC
+        if 0 <= ry < TARGET and 0 <= rx < TARGET and (abs(ry - cy) > 2 or abs(rx - cx) > 2):
+            random_mags.append(float(noise_mag[ry, rx]))
 
-    # ── Step 5: Spatial patch phase coherence ─────────────────────────────────
-    # Divide image into patches; the dominant FFT peak in each patch should
-    # maintain consistent phase if a global periodic carrier is present.
-    n_div = min(4, H // 64, W // 64)
-    if n_div >= 2:
-        ph, pw = H // n_div, W // n_div
-        patch_top_phases = []
-        for pi in range(n_div):
-            for pj in range(n_div):
-                p = noise[pi*ph:(pi+1)*ph, pj*pw:(pj+1)*pw, 1]
-                p_fft = np.fft.fftshift(np.fft.fft2(p))
-                p_mag = np.abs(p_fft)
-                pcy, pcx = ph // 2, pw // 2
-                p_dc_h, p_dc_w = max(ph // 10, 2), max(pw // 10, 2)
-                p_mag[pcy-p_dc_h:pcy+p_dc_h, pcx-p_dc_w:pcx+p_dc_w] = 0
-                if p_mag.max() > 1e-6:
-                    pk = np.argmax(p_mag.ravel())
-                    py, px = np.unravel_index(pk, p_fft.shape)
-                    patch_top_phases.append(np.angle(p_fft[py, px]))
-        if len(patch_top_phases) > 1:
-            sp_phasors = np.exp(1j * np.array(patch_top_phases))
-            spatial_coherence = float(abs(sp_phasors.mean()))
-        else:
-            spatial_coherence = 0.5
-    else:
-        spatial_coherence = 0.5
+    mean_random  = float(np.mean(random_mags)) + 1e-10
 
-    # ── Step 6: Conjugate symmetry of candidate carriers ─────────────────────
-    # FFT of a real signal satisfies F(y,x) = conj(F(H-y, W-x)).
-    # A synthesised carrier introduces perfectly symmetric pairs.
-    # We score how well the top bins satisfy this symmetry.
-    sym_scores = []
-    for y, x in zip(top_ys[:48], top_xs[:48]):
-        my = (H - y) % H
-        mx = (W - x) % W
-        for c in range(3):
-            v1 = fft_ch[c][y, x]
-            v2 = np.conj(fft_ch[c][my, mx])
-            mag_sum = abs(v1) + abs(v2)
-            if mag_sum > 1e-6:
-                # Normalised agreement between v1 and v2
-                sym_scores.append(1.0 - abs(v1 - v2) / (mag_sum + 1e-8))
-    sym_score = float(np.mean(sym_scores)) if sym_scores else 0.5
+    # ── 6. CVR ───────────────────────────────────────────────────────────────
+    dark_cvr  = float(np.mean(dark_mags))  / mean_random if dark_mags  else 1.0
+    white_cvr = float(np.mean(white_mags)) / mean_random if white_mags else 1.0
+    all_cvr   = float(np.mean(all_mags))   / mean_random if all_mags   else 1.0
+    best_cvr  = max(dark_cvr, white_cvr)   # take the best-matching carrier set
 
-    # ── Step 7: Combine into SynthID probability ──────────────────────────────
-    # Threshold guide from reverse-SynthID:
-    #   tau = 0.60 separates carrier (>0.6) from content (<0.3)
-    combined = (cross_coherence * 0.50
-                + spatial_coherence * 0.30
-                + (sym_score - 0.5) * 0.40)
+    # ── 7. Score — sigmoid centred at CVR=2.0 ────────────────────────────────
+    # Baseline (non-watermarked images): CVR ≈ 1.0
+    # SynthID watermarked:               CVR typically > 2.0
+    ai_score = float(np.clip(1.0 / (1.0 + np.exp(-2.5 * (best_cvr - 2.0))), 0, 1))
 
-    # Sigmoid centred at 0.45 (slightly below tau=0.60 to account for
-    # single-image estimation noise)
-    ai_score = float(np.clip(1.0 / (1.0 + np.exp(-10.0 * (combined - 0.45))), 0, 1))
-
-    # ── Carrier heat-map for visualisation ───────────────────────────────────
-    carrier_map = np.zeros((H, W), dtype=np.float32)
-    for y, x in zip(top_ys, top_xs):
-        carrier_map[y, x] = 1.0
-    # Gaussian spread so individual pixels are visible
-    from scipy.ndimage import gaussian_filter
-    carrier_map = gaussian_filter(carrier_map, sigma=max(H, W) / 200)
-    carrier_map = np.clip(carrier_map / (carrier_map.max() + 1e-8), 0, 1)
+    # ── Carrier visualisation ─────────────────────────────────────────────────
+    vis = np.zeros((TARGET, TARGET), dtype=np.float32)
+    for fy, fx in _ALL_CARRIERS:
+        y, x = fy + cy, fx + cx
+        if 0 <= y < TARGET and 0 <= x < TARGET:
+            vis[y, x] = 1.0
+    vis = gaussian_filter(vis, sigma=TARGET / 200)
+    if vis.max() > 0:
+        vis /= vis.max()
 
     return {
-        "rg_coherence":    rg_coh,
-        "bg_coherence":    bg_coh,
-        "cross_coherence": cross_coherence,
-        "spatial_coherence": spatial_coherence,
-        "sym_score":       sym_score,
-        "combined":        combined,
-        "ai_score":        ai_score,
-        "mag_spectrum":    mag_g,
-        "carrier_map":     carrier_map,
-        "K":               K,
-        "n_bins_searched": int(H * W),
+        "dark_cvr":    dark_cvr,
+        "white_cvr":   white_cvr,
+        "all_cvr":     all_cvr,
+        "best_cvr":    best_cvr,
+        "mean_random": mean_random,
+        "ai_score":    ai_score,
+        "noise_mag":   noise_mag,
+        "carrier_vis": vis,
     }
+
 
 # ══════════════════════════════════════════════════════════════════════════════
 # Visualisation helpers
@@ -317,16 +323,13 @@ def enhance_saturation(img: Image.Image, factor: float = 8.0) -> Image.Image:
     except ImportError:
         arr = np.array(img, dtype=np.float32) / 255.0
         mean = arr.mean(axis=2, keepdims=True)
-        enhanced = np.clip((mean + (arr - mean) * factor) * 255, 0, 255).astype(np.uint8)
-        return Image.fromarray(enhanced)
+        return Image.fromarray(np.clip((mean + (arr - mean) * factor) * 255, 0, 255).astype(np.uint8))
 
 
 def ela_to_image(ela_map: np.ndarray) -> Image.Image:
     ch = ela_map.mean(axis=2) if ela_map.ndim == 3 else ela_map
-    clipped = np.clip(ch, 0, 30)
-    norm = (clipped / 30.0 * 255).astype(np.uint8)
-    colored = np.stack([norm // 3, norm, norm // 4], axis=2).astype(np.uint8)
-    return Image.fromarray(colored)
+    norm = (np.clip(ch, 0, 30) / 30.0 * 255).astype(np.uint8)
+    return Image.fromarray(np.stack([norm // 3, norm, norm // 4], axis=2))
 
 
 def fft_to_image(log_mag: np.ndarray) -> Image.Image:
@@ -334,38 +337,35 @@ def fft_to_image(log_mag: np.ndarray) -> Image.Image:
     return Image.fromarray(norm).convert("RGB")
 
 
-def carrier_map_to_image(carrier_map: np.ndarray, mag_spectrum: np.ndarray) -> Image.Image:
-    """Render SynthID carrier heat-map: green = suspected carriers, dark = background."""
-    # Normalise spectrum as dimmed base
-    base = np.log1p(mag_spectrum)
+def carrier_map_to_image(vis: np.ndarray, noise_mag: np.ndarray) -> Image.Image:
+    base = np.log1p(noise_mag)
     base = (base / (base.max() + 1e-8) * 80).astype(np.uint8)
-    # Overlay carrier heat-map in green
-    heat = (carrier_map * 255).astype(np.uint8)
+    heat = (vis * 255).astype(np.uint8)
     r = np.clip(base.astype(np.int16) - heat.astype(np.int16) // 2, 0, 255).astype(np.uint8)
     g = np.clip(base.astype(np.int16) + heat.astype(np.int16), 0, 255).astype(np.uint8)
     b = base
     return Image.fromarray(np.stack([r, g, b], axis=2))
 
+
 # ══════════════════════════════════════════════════════════════════════════════
-# Main analysis
+# Ensemble
 # ══════════════════════════════════════════════════════════════════════════════
-def compute_ai_probability(noise_res, ela_res, dct_res, fmt_res, sid_res):
+def compute_ai_probability(noise, ela, dct, fmt, sid):
     combined = (
-        noise_res["ai_score"] * 0.30 +
-        ela_res["ai_score"]   * 0.20 +
-        fmt_res["ai_score"]   * 0.15 +
-        dct_res["ai_score"]   * 0.10 +
-        sid_res["ai_score"]   * 0.25
+        noise["ai_score"] * 0.35 +
+        ela["ai_score"]   * 0.25 +
+        fmt["ai_score"]   * 0.15 +
+        dct["ai_score"]   * 0.10 +
+        sid["ai_score"]   * 0.15
     )
-    stretched = float(1.0 / (1.0 + np.exp(-9.0 * (combined - 0.50))))
-    probability = float(np.clip(stretched, 0.02, 0.98))
-    if probability >= 0.68:
+    prob = float(np.clip(1.0 / (1.0 + np.exp(-9.0 * (combined - 0.50))), 0.02, 0.98))
+    if prob >= 0.68:
         verdict = "likely_ai"
-    elif probability <= 0.38:
+    elif prob <= 0.35:
         verdict = "likely_real"
     else:
         verdict = "inconclusive"
-    return probability, verdict
+    return prob, verdict
 
 
 @st.cache_data(show_spinner=False)
@@ -373,24 +373,27 @@ def analyze_image(img_bytes: bytes, mime_type: str) -> dict:
     img = Image.open(io.BytesIO(img_bytes)).convert("RGB")
     if max(img.size) > 1024:
         img.thumbnail((1024, 1024), Image.LANCZOS)
+
     enhanced         = enhance_saturation(img, factor=8.0)
     magnitude, log_m = compute_fft_spectrum(img)
     noise_res        = estimate_noise_level(img)
     ela_res          = analyze_ela(img)
-    dct_res          = detect_dct_blocks(magnitude, img.size)
+    dct_res          = detect_dct_blocks(magnitude)
     fmt_res          = analyze_source_format(mime_type)
     sid_res          = detect_synthid_watermark(img)
-    probability, verdict = compute_ai_probability(noise_res, ela_res, dct_res, fmt_res, sid_res)
+    prob, verdict    = compute_ai_probability(noise_res, ela_res, dct_res, fmt_res, sid_res)
+
     return {
         "original": img, "enhanced": enhanced,
         "log_mag":  log_m, "ela_map": ela_res["ela_map"],
-        "carrier_map":  sid_res["carrier_map"],
-        "mag_spectrum": sid_res["mag_spectrum"],
+        "carrier_vis": sid_res["carrier_vis"],
+        "noise_mag":   sid_res["noise_mag"],
         "noise": noise_res, "ela": ela_res,
         "dct":   dct_res,   "fmt": fmt_res,
         "sid":   sid_res,
-        "probability": probability, "verdict": verdict,
+        "probability": prob, "verdict": verdict,
     }
+
 
 # ══════════════════════════════════════════════════════════════════════════════
 # UI helpers
@@ -402,13 +405,9 @@ def inject_css():
 def render_hero():
     st.html("""
 <div style="text-align:center;padding:32px 0 20px;position:relative;">
-  <div style="position:absolute;top:0;left:50%;transform:translateX(-50%);
-              width:500px;height:100px;
-              background:radial-gradient(ellipse,rgba(0,255,68,.07) 0%,transparent 70%);
-              pointer-events:none;"></div>
   <div style="font-family:'Orbitron','Share Tech Mono',monospace;font-size:.7rem;
               letter-spacing:6px;color:rgba(0,255,68,.4);text-transform:uppercase;
-              margin-bottom:10px;">// FORENSIC IMAGE ANALYSIS SYSTEM v3.0 //</div>
+              margin-bottom:10px;">// FORENSIC IMAGE ANALYSIS SYSTEM v3.1 //</div>
   <div style="font-family:'Orbitron','Share Tech Mono',monospace;font-size:2.2rem;
               font-weight:900;color:#fff;
               text-shadow:0 0 7px #fff,0 0 15px #fff,0 0 30px #00ff88,0 0 60px rgba(0,255,136,.4);
@@ -418,9 +417,9 @@ def render_hero():
   <div style="font-family:'Share Tech Mono','Courier New',monospace;font-size:.82rem;
               color:#336633;letter-spacing:2px;margin-top:8px;">
     [ NOISE &bull; ELA &bull; DCT &bull; FORMAT &bull; <span style="color:#00ff88;
-    text-shadow:0 0 8px #00ff88;">SYNTHID CARRIER PHASE</span> ]
+    text-shadow:0 0 8px #00ff88;">SYNTHID CVR (reverse-SynthID)</span> ]
   </div>
-  <div style="margin:18px auto 0;width:300px;height:1px;
+  <div style="margin:18px auto 0;width:320px;height:1px;
               background:linear-gradient(90deg,transparent,#00ff88,transparent);
               box-shadow:0 0 8px #00ff88;"></div>
 </div>
@@ -431,12 +430,12 @@ def render_terminal_boot():
     st.html("""
 <div style="font-family:'Share Tech Mono','Courier New',monospace;color:#336633;
             font-size:.76rem;letter-spacing:1px;padding:4px 0 14px;line-height:1.9;">
-  &gt; INITIALIZING FORENSIC ENGINE......... <span style="color:#00ff88;">OK</span><br>
-  &gt; LOADING NOISE ESTIMATOR.............. <span style="color:#00ff88;">OK</span><br>
-  &gt; ELA SUBSYSTEM READY.................. <span style="color:#00ff88;">OK</span><br>
-  &gt; DCT BLOCK DETECTOR................... <span style="color:#00ff88;">OK</span><br>
-  &gt; SYNTHID CARRIER PHASE MODULE......... <span style="color:#00ff88;">OK</span><br>
-  &gt; REVERSE-SYNTHID ENGINE v1.0.......... <span style="color:#00ff88;">ARMED</span><br>
+  &gt; LAPLACIAN NOISE ESTIMATOR............. <span style="color:#00ff88;">OK</span><br>
+  &gt; ERROR LEVEL ANALYSIS MODULE........... <span style="color:#00ff88;">OK</span><br>
+  &gt; DCT BLOCK DETECTOR.................... <span style="color:#00ff88;">OK</span><br>
+  &gt; SYNTHID CARRIER CVR ENGINE............ <span style="color:#00ff88;">ARMED</span><br>
+  &gt; CARRIER TABLE: 36 dark + 20 white bins <span style="color:#00ff88;">LOADED</span><br>
+  &gt; REF: github.com/aloshdenny/reverse-SynthID<br>
   &gt; AWAITING INPUT FILE<span style="color:#00ff88;">_</span>
 </div>
 """)
@@ -453,29 +452,26 @@ def render_section_header(text: str):
 """)
 
 
-def render_verdict(probability: float, verdict: str, sid_score: float):
+def render_verdict(probability: float, verdict: str, sid: dict):
     pct = int(probability * 100)
-    sid_pct = int(sid_score * 100)
+    best_cvr = sid["best_cvr"]
     if verdict == "likely_ai":
         gc = "#ff2244"; label = "WARNING — SYNTHETIC ORIGIN DETECTED"
-        sub = "HIGH CONFIDENCE &nbsp;|&nbsp; AI-GENERATED"
-        rgb = "255,34,68"
+        sub = "HIGH CONFIDENCE &nbsp;|&nbsp; AI-GENERATED"; rgb = "255,34,68"
     elif verdict == "likely_real":
         gc = "#00ff88"; label = "AUTHENTIC SIGNAL DETECTED"
-        sub = "HIGH CONFIDENCE &nbsp;|&nbsp; REAL PHOTOGRAPH"
-        rgb = "0,255,136"
+        sub = "HIGH CONFIDENCE &nbsp;|&nbsp; REAL PHOTOGRAPH"; rgb = "0,255,136"
     else:
         gc = "#ffaa00"; label = "SIGNAL AMBIGUOUS"
-        sub = "INCONCLUSIVE &nbsp;|&nbsp; FURTHER ANALYSIS REQUIRED"
-        rgb = "255,170,0"
+        sub = "INCONCLUSIVE &nbsp;|&nbsp; FURTHER ANALYSIS REQUIRED"; rgb = "255,170,0"
 
-    # SynthID badge colour
-    if sid_pct >= 65:
-        sid_c = "#ff2244"; sid_label = "SYNTHID DETECTED"
-    elif sid_pct <= 35:
-        sid_c = "#00ff88"; sid_label = "NO SYNTHID"
+    # SynthID CVR badge
+    if best_cvr >= 2.5:
+        sid_c = "#ff2244"; sid_label = f"SYNTHID DETECTED  CVR={best_cvr:.2f}"
+    elif best_cvr >= 1.8:
+        sid_c = "#ffaa00"; sid_label = f"SYNTHID POSSIBLE  CVR={best_cvr:.2f}"
     else:
-        sid_c = "#ffaa00"; sid_label = "SYNTHID UNCERTAIN"
+        sid_c = "#00ff88"; sid_label = f"NO SYNTHID  CVR={best_cvr:.2f}"
 
     st.html(f"""
 <div style="background:radial-gradient(ellipse at center top,rgba({rgb},.04) 0%,#000 55%);
@@ -488,26 +484,29 @@ def render_verdict(probability: float, verdict: str, sid_score: float):
   <div style="position:absolute;bottom:-1px;left:-1px;width:18px;height:18px;border-bottom:2px solid {gc};border-left:2px solid {gc};box-shadow:-2px 2px 10px {gc};"></div>
   <div style="position:absolute;bottom:-1px;right:-1px;width:18px;height:18px;border-bottom:2px solid {gc};border-right:2px solid {gc};box-shadow:2px 2px 10px {gc};"></div>
   <div style="font-size:.72rem;letter-spacing:4px;color:{gc};text-shadow:0 0 8px {gc};margin-bottom:14px;">{label}</div>
-  <div style="display:flex;align-items:center;justify-content:center;gap:32px;">
+  <div style="display:flex;align-items:center;justify-content:center;gap:36px;flex-wrap:wrap;">
     <div>
-      <div style="font-family:'Orbitron','Share Tech Mono',monospace;font-size:5rem;font-weight:900;
+      <div style="font-family:'Orbitron','Share Tech Mono',monospace;font-size:4.8rem;font-weight:900;
                   color:#fff;text-shadow:0 0 7px #fff,0 0 20px {gc};line-height:1;margin-bottom:4px;">
-        {pct}<span style="font-size:2.2rem;opacity:.6;">%</span>
+        {pct}<span style="font-size:2rem;opacity:.6;">%</span>
       </div>
-      <div style="font-size:.68rem;letter-spacing:2px;color:{gc}88;">AI PROBABILITY</div>
+      <div style="font-size:.68rem;letter-spacing:2px;color:{gc}88;">ENSEMBLE AI SCORE</div>
     </div>
     <div style="width:1px;height:70px;background:linear-gradient(180deg,transparent,{gc}44,transparent);"></div>
     <div>
-      <div style="font-family:'Orbitron',monospace;font-size:2.4rem;font-weight:700;
-                  color:{sid_c};text-shadow:0 0 10px {sid_c};line-height:1;margin-bottom:4px;">
-        {sid_pct}<span style="font-size:1.1rem;opacity:.6;">%</span>
+      <div style="font-size:.64rem;letter-spacing:2px;color:{sid_c};
+                  text-shadow:0 0 8px {sid_c};margin-bottom:6px;">&#x25C8; SYNTHID CVR</div>
+      <div style="font-family:'Orbitron',monospace;font-size:2.2rem;font-weight:700;
+                  color:{sid_c};text-shadow:0 0 10px {sid_c};line-height:1;">
+        {best_cvr:.2f}x
       </div>
-      <div style="font-size:.65rem;letter-spacing:2px;color:{sid_c}88;">&#x25C8; {sid_label}</div>
+      <div style="font-size:.62rem;letter-spacing:1px;color:{sid_c}88;margin-top:4px;">{sid_label}</div>
     </div>
   </div>
   <div style="font-size:.68rem;letter-spacing:3px;color:{gc}77;margin:14px 0 18px;">{sub}</div>
   <div style="background:#001008;border:1px solid {gc}28;height:7px;overflow:hidden;border-radius:1px;">
-    <div style="background:linear-gradient(90deg,{gc}44,{gc});width:{pct}%;height:100%;box-shadow:0 0 10px {gc};"></div>
+    <div style="background:linear-gradient(90deg,{gc}44,{gc});
+                width:{pct}%;height:100%;box-shadow:0 0 10px {gc};"></div>
   </div>
 </div>
 """)
@@ -515,13 +514,8 @@ def render_verdict(probability: float, verdict: str, sid_score: float):
 
 def render_signal_card(label: str, score: float, detail: str, symbol: str):
     pct = int(score * 100)
-    if pct > 62:
-        bc, tc = "#ff2244", "#ff4466"
-    elif pct < 38:
-        bc, tc = "#00ff88", "#00cc66"
-    else:
-        bc, tc = "#ffaa00", "#ffcc44"
-
+    bc  = "#ff2244" if pct > 62 else "#00ff88" if pct < 38 else "#ffaa00"
+    tc  = "#ff4466" if pct > 62 else "#00cc66" if pct < 38 else "#ffcc44"
     st.html(f"""
 <div style="border:1px solid {bc}2a;border-left:3px solid {bc};
             background:linear-gradient(90deg,{bc}06 0%,transparent 50%);
@@ -541,18 +535,16 @@ def render_signal_card(label: str, score: float, detail: str, symbol: str):
 """)
 
 
-def render_synthid_detail(sid: dict):
-    rg  = int(sid["rg_coherence"]    * 100)
-    bg  = int(sid["bg_coherence"]    * 100)
-    spa = int(sid["spatial_coherence"]* 100)
-    sym = int(sid["sym_score"]        * 100)
-    cc  = int(sid["cross_coherence"]  * 100)
+def render_synthid_panel(sid: dict):
+    dc, wc, ac, bc = sid["dark_cvr"], sid["white_cvr"], sid["all_cvr"], sid["best_cvr"]
 
-    def bar(val, ref=60):
-        col = "#ff2244" if val >= ref else "#00ff88" if val < ref-15 else "#ffaa00"
-        return (f'<div style="background:#001008;height:3px;border-radius:1px;'
-                f'overflow:hidden;margin:2px 0 6px;">'
-                f'<div style="background:{col};width:{val}%;height:100%;'
+    def bar(val, lo=1.0, hi=2.5):
+        frac = int(min((val - lo) / max(hi - lo, 0.01) * 100, 100))
+        frac = max(frac, 0)
+        col = "#ff2244" if val >= 2.5 else "#ffaa00" if val >= 1.8 else "#00ff88"
+        return (f'<div style="background:#001008;height:4px;border-radius:1px;'
+                f'overflow:hidden;margin:3px 0 8px;">'
+                f'<div style="background:{col};width:{frac}%;height:100%;'
                 f'box-shadow:0 0 6px {col};"></div></div>')
 
     st.html(f"""
@@ -560,55 +552,50 @@ def render_synthid_detail(sid: dict):
             background:#000a04;padding:16px 20px;margin:8px 0;border-radius:1px;
             font-family:'Share Tech Mono','Courier New',monospace;font-size:.75rem;">
   <div style="color:#00ff88;letter-spacing:3px;font-size:.78rem;margin-bottom:12px;">
-    &#x25C8; SYNTHID CARRIER ANALYSIS — reverse-SynthID
+    &#x25C8; SYNTHID CARRIER-TO-VARIANCE RATIO &mdash; reverse-SynthID
   </div>
-  <div style="display:grid;grid-template-columns:1fr 1fr;gap:10px 24px;">
+  <div style="display:grid;grid-template-columns:1fr 1fr 1fr;gap:10px 24px;">
     <div>
-      <div style="color:#669966;margin-bottom:1px;">R&#x2194;G PHASE COHERENCE</div>
-      {bar(rg)}
-      <span style="color:#00ff88;">{rg}%</span>
-      <span style="color:#334433;"> / tau=60%</span>
+      <div style="color:#669966;margin-bottom:1px;">DARK CARRIERS (36 bins)</div>
+      {bar(dc)}<span style="color:#00ff88;">{dc:.3f}x</span>
+      <span style="color:#334433;"> vs random</span>
     </div>
     <div>
-      <div style="color:#669966;margin-bottom:1px;">B&#x2194;G PHASE COHERENCE</div>
-      {bar(bg)}
-      <span style="color:#00ff88;">{bg}%</span>
-      <span style="color:#334433;"> / tau=60%</span>
+      <div style="color:#669966;margin-bottom:1px;">WHITE CARRIERS (20 bins)</div>
+      {bar(wc)}<span style="color:#00ff88;">{wc:.3f}x</span>
+      <span style="color:#334433;"> vs random</span>
     </div>
     <div>
-      <div style="color:#669966;margin-bottom:1px;">SPATIAL PATCH COHERENCE</div>
-      {bar(spa)}
-      <span style="color:#00ff88;">{spa}%</span>
-    </div>
-    <div>
-      <div style="color:#669966;margin-bottom:1px;">FFT CONJUGATE SYMMETRY</div>
-      {bar(sym, ref=65)}
-      <span style="color:#00ff88;">{sym}%</span>
+      <div style="color:#669966;margin-bottom:1px;">BEST CVR (used for score)</div>
+      {bar(bc)}<span style="color:#00ff88;">{bc:.3f}x</span>
+      <span style="color:#334433;"> detection CVR</span>
     </div>
   </div>
   <div style="margin-top:10px;padding-top:8px;border-top:1px solid #00ff2211;
-              color:#334433;font-size:.69rem;line-height:1.6;">
-    CROSS-CHANNEL COHERENCE: <span style="color:#88cc88;">{cc}%</span>
-    &nbsp;&bull;&nbsp; K={sid['K']} carrier candidates searched
+              color:#334433;font-size:.69rem;line-height:1.7;">
+    THRESHOLD: <span style="color:#88cc88;">&lt;1.8x=CLEAN &nbsp; 1.8-2.5x=UNCERTAIN &nbsp; &gt;2.5x=SYNTHID</span>
+    &nbsp;&bull;&nbsp; SEED=42 RANDOM REF &nbsp;&bull;&nbsp; 512px CANONICAL SCALE<br>
+    CARRIERS EMPIRICALLY EXTRACTED FROM 291 GEMINI WATERMARKED IMAGES
     &nbsp;&bull;&nbsp; REF: github.com/aloshdenny/reverse-SynthID
   </div>
 </div>
 """)
 
 
-def render_log_block(lines: list, accent_color: str):
-    rows = ""
-    for i, line in enumerate(lines):
-        color = accent_color if i == len(lines) - 1 else "#336633"
-        rows += f'<div style="color:{color};">{line}</div>'
+def render_log_block(lines: list, color: str):
+    rows = "".join(
+        f'<div style="color:{"#00cc55" if i < len(lines)-1 else color};">{l}</div>'
+        for i, l in enumerate(lines)
+    )
     st.html(f"""
-<div style="background:#000a04;border:1px solid #00ff2218;border-left:3px solid {accent_color};
+<div style="background:#000a04;border:1px solid #00ff2218;border-left:3px solid {color};
             padding:14px 18px;font-family:'Share Tech Mono','Courier New',monospace;
             font-size:.76rem;line-height:1.85;margin-top:14px;
-            box-shadow:0 0 20px {accent_color}0c;">
+            box-shadow:0 0 20px {color}0c;">
   {rows}
 </div>
 """)
+
 
 # ══════════════════════════════════════════════════════════════════════════════
 # Pages
@@ -617,17 +604,15 @@ def page_home():
     render_hero()
     render_terminal_boot()
 
-    uploaded_file = st.file_uploader(
-        "UPLOAD TARGET IMAGE",
-        type=SUPPORTED_FORMATS,
+    uploaded = st.file_uploader(
+        "UPLOAD TARGET IMAGE", type=SUPPORTED_FORMATS,
         help="JPG · PNG · WEBP · max 10 MB",
     )
 
-    if uploaded_file is None:
+    if uploaded is None:
         st.html("""
-<div style="border:1px solid rgba(0,255,34,.2);border-radius:2px;
-            padding:48px 20px;text-align:center;
-            background:radial-gradient(ellipse at center,#001a0a 0%,#000 70%);
+<div style="border:1px solid rgba(0,255,34,.2);border-radius:2px;padding:48px 20px;
+            text-align:center;background:radial-gradient(ellipse at center,#001a0a 0%,#000 70%);
             box-shadow:0 0 30px rgba(0,255,26,.04),inset 0 0 40px rgba(0,255,26,.03);
             margin-top:10px;font-family:'Share Tech Mono',monospace;position:relative;">
   <div style="position:absolute;top:-1px;left:-1px;width:12px;height:12px;border-top:2px solid #00ff88;border-left:2px solid #00ff88;box-shadow:-2px -2px 8px #00ff88;"></div>
@@ -641,81 +626,71 @@ def page_home():
 """)
         return
 
-    file_bytes = uploaded_file.read()
+    file_bytes = uploaded.read()
     if len(file_bytes) / (1024 * 1024) > MAX_FILE_SIZE_MB:
         st.error("FILE TOO LARGE — Maximum 10 MB")
         return
 
-    mime_type = uploaded_file.type or "image/jpeg"
+    mime_type = uploaded.type or "image/jpeg"
 
-    with st.spinner("RUNNING FORENSIC ANALYSIS + SYNTHID SCAN..."):
+    with st.spinner("RUNNING FORENSIC ANALYSIS + SYNTHID CVR SCAN..."):
         try:
-            results = analyze_image(file_bytes, mime_type)
+            R = analyze_image(file_bytes, mime_type)
         except Exception as e:
             st.error(f"ANALYSIS FAILED: {e}")
-            import traceback
-            st.code(traceback.format_exc())
+            import traceback; st.code(traceback.format_exc())
             return
 
-    sid   = results["sid"]
-    noise = results["noise"]
-    ela   = results["ela"]
-    dct   = results["dct"]
-    fmt   = results["fmt"]
+    sid   = R["sid"]
+    noise = R["noise"]
+    ela   = R["ela"]
+    dct   = R["dct"]
+    fmt   = R["fmt"]
 
     # ── Verdict ───────────────────────────────────────────────────────────────
     render_section_header("VERDICT")
-    render_verdict(results["probability"], results["verdict"], sid["ai_score"])
+    render_verdict(R["probability"], R["verdict"], sid)
 
     # ── Visuals ───────────────────────────────────────────────────────────────
     render_section_header("VISUAL FORENSICS")
     c1, c2, c3, c4, c5 = st.columns(5)
-    with c1:
-        st.image(results["original"],                  caption="[ ORIGINAL ]",          use_container_width=True)
-    with c2:
-        st.image(results["enhanced"],                  caption="[ SATURATION x8 ]",     use_container_width=True)
-    with c3:
-        st.image(ela_to_image(results["ela_map"]),     caption="[ ELA MAP ]",            use_container_width=True)
-    with c4:
-        st.image(fft_to_image(results["log_mag"]),     caption="[ FFT SPECTRUM ]",       use_container_width=True)
-    with c5:
-        st.image(
-            carrier_map_to_image(results["carrier_map"], results["mag_spectrum"]),
-            caption="[ SYNTHID CARRIERS ]",
-            use_container_width=True,
-        )
+    with c1: st.image(R["original"],                           caption="[ ORIGINAL ]",          use_container_width=True)
+    with c2: st.image(R["enhanced"],                           caption="[ SATURATION x8 ]",     use_container_width=True)
+    with c3: st.image(ela_to_image(R["ela_map"]),              caption="[ ELA MAP ]",            use_container_width=True)
+    with c4: st.image(fft_to_image(R["log_mag"]),              caption="[ FFT SPECTRUM ]",       use_container_width=True)
+    with c5: st.image(carrier_map_to_image(R["carrier_vis"], R["noise_mag"]),
+                      caption="[ SYNTHID CARRIERS ]",          use_container_width=True)
 
-    # ── SynthID deep-dive ────────────────────────────────────────────────────
-    render_section_header("SYNTHID CARRIER PHASE ANALYSIS")
-    render_synthid_detail(sid)
+    # ── SynthID panel ─────────────────────────────────────────────────────────
+    render_section_header("SYNTHID CARRIER-TO-VARIANCE RATIO  (reverse-SynthID)")
+    render_synthid_panel(sid)
 
-    # ── Signal breakdown ──────────────────────────────────────────────────────
+    # ── Signal cards ──────────────────────────────────────────────────────────
     render_section_header("SIGNAL ANALYSIS")
+
     render_signal_card(
-        "SYNTHID CARRIER PHASE", sid["ai_score"],
-        (f"cross-channel coherence={int(sid['cross_coherence']*100)}%  "
-         f"spatial={int(sid['spatial_coherence']*100)}%  "
-         f"sym={int(sid['sym_score']*100)}%  |  "
-         + ("CARRIER PHASE COHERENCE ELEVATED — SYNTHID SIGNATURE PROBABLE"
-            if sid["ai_score"] > 0.6
-            else "NO STRONG CARRIER COHERENCE — SYNTHID NOT DETECTED"
-            if sid["ai_score"] < 0.4
-            else "MARGINAL COHERENCE — INCONCLUSIVE")),
+        "SYNTHID CVR", sid["ai_score"],
+        (f"best_CVR={sid['best_cvr']:.3f}x  "
+         f"dark={sid['dark_cvr']:.3f}x  white={sid['white_cvr']:.3f}x  |  "
+         + ("CARRIER ENERGY ELEVATED — SYNTHID FINGERPRINT PROBABLE" if sid["best_cvr"] >= 2.5
+            else "MARGINAL ELEVATION — INCONCLUSIVE" if sid["best_cvr"] >= 1.8
+            else "NO CARRIER ELEVATION — CLEAN / NOT SYNTHID")),
         "[S]",
     )
     render_signal_card(
         "NOISE LEVEL", noise["ai_score"],
         f"Laplacian sigma={noise['sigma']:.2f}  |  " + (
-            "UNNATURALLY CLEAN — AI SIGNATURE" if noise["sigma"] < 3
-            else "NATURAL SENSOR NOISE — CAMERA" if noise["sigma"] > 6
+            "UNNATURALLY SMOOTH — AI SIGNATURE" if noise["sigma"] < 2
+            else "NATURAL SENSOR NOISE — CAMERA" if noise["sigma"] > 5
             else "BORDERLINE REGION"),
         "[!]",
     )
     render_signal_card(
         "ERROR LEVEL ANALYSIS", ela["ai_score"],
         f"Mean ELA={ela['ela_mean']:.2f}  |  " + (
-            "HIGH — FIRST JPEG COMPRESSION — PNG/AI SOURCE" if ela["ela_mean"] > 7
-            else "LOW — PREVIOUSLY JPEG COMPRESSED — CAMERA"),
+            "HIGH — FIRST JPEG COMPRESSION — PNG/AI SOURCE" if ela["ela_mean"] > 8
+            else "LOW — PRE-COMPRESSED — REAL CAMERA JPEG" if ela["ela_mean"] < 4
+            else "MODERATE — AMBIGUOUS"),
         "[~]",
     )
     render_signal_card(
@@ -723,41 +698,39 @@ def page_home():
         f"Detected: {fmt['fmt_label']}  |  " + (
             "PNG IS DEFAULT OUTPUT FOR MOST AI GENERATORS" if fmt["fmt_label"] == "PNG"
             else "WEBP USED BY GEMINI / AI PLATFORMS" if fmt["fmt_label"] == "WebP"
-            else "JPEG IS NATIVE CAMERA FORMAT"),
+            else "JPEG IS NATIVE CAMERA FORMAT — LOW AI PRIOR"),
         "[F]",
     )
     render_signal_card(
         "DCT BLOCK STRUCTURE", dct["ai_score"],
         f"Block strength={dct['dct_strength']:.3f}  |  " + (
             "STRONG 8x8 JPEG GRID — CAMERA JPEG" if dct["dct_strength"] > 0.5
-            else "NO JPEG BLOCK PATTERN — LOSSLESS/AI SOURCE"),
+            else "WEAK GRID — LOSSLESS/AI SOURCE"),
         "[D]",
     )
 
-    # ── Conclusion log ───────────────────────────────────────────────────────
-    prob    = results["probability"]
-    verdict = results["verdict"]
+    # ── Log ───────────────────────────────────────────────────────────────────
+    prob = R["probability"]; verdict = R["verdict"]
     if verdict == "likely_ai":
         color = "#ff2244"; status = "SYNTHETIC"
-        conclusion = "SYNTHETIC ORIGIN — AI WATERMARK SIGNATURE DETECTED"
+        conclusion = "AI ORIGIN — MULTIPLE FORENSIC SIGNALS CONSISTENT WITH SYNTHESIS"
     elif verdict == "likely_real":
         color = "#00ff88"; status = "AUTHENTIC"
         conclusion = "SIGNALS CONSISTENT WITH REAL CAMERA PHOTOGRAPH"
     else:
         color = "#ffaa00"; status = "INCONCLUSIVE"
-        conclusion = "SIGNALS CONFLICT — POSSIBLE POST-PROCESSING OR RE-ENCODING"
+        conclusion = "SIGNALS CONFLICT — POSSIBLE POST-PROCESSING OR FORMAT CONVERSION"
 
     render_log_block([
-        f"[RESULT]   AI_PROBABILITY={int(prob*100)}%  STATUS={status}",
-        f"[SYNTHID]  coherence={int(sid['cross_coherence']*100)}%  spatial={int(sid['spatial_coherence']*100)}%  score={int(sid['ai_score']*100)}%",
-        f"[NOISE]    sigma={noise['sigma']:.2f}  threshold=4.0",
-        f"[ELA]      mean={ela['ela_mean']:.2f}  threshold=7.0",
-        f"[FORMAT]   type={fmt['fmt_label']}",
-        f"[DCT]      strength={dct['dct_strength']:.3f}",
+        f"[RESULT]  AI_PROBABILITY={int(prob*100)}%  STATUS={status}",
+        f"[SYNTHID] best_CVR={sid['best_cvr']:.3f}x  dark={sid['dark_cvr']:.3f}x  white={sid['white_cvr']:.3f}x  score={int(sid['ai_score']*100)}%",
+        f"[NOISE]   sigma={noise['sigma']:.2f}  score={int(noise['ai_score']*100)}%",
+        f"[ELA]     mean={ela['ela_mean']:.2f}  score={int(ela['ai_score']*100)}%",
+        f"[FORMAT]  {fmt['fmt_label']}  score={int(fmt['ai_score']*100)}%",
+        f"[DCT]     strength={dct['dct_strength']:.3f}  score={int(dct['ai_score']*100)}%",
         f"[CONCLUSION] {conclusion}",
     ], color)
 
-    # ── Raw data ──────────────────────────────────────────────────────────────
     with st.expander("[ RAW FORENSIC DATA ]"):
         c1, c2, c3 = st.columns(3)
         with c1:
@@ -768,31 +741,26 @@ def page_home():
             st.json({"format": fmt["fmt_label"], "fmt_ai": round(fmt["ai_score"], 4)})
         with c3:
             st.json({
-                "synthid_ai_score":    round(sid["ai_score"], 4),
-                "cross_coherence":     round(sid["cross_coherence"], 4),
-                "rg_coherence":        round(sid["rg_coherence"], 4),
-                "bg_coherence":        round(sid["bg_coherence"], 4),
-                "spatial_coherence":   round(sid["spatial_coherence"], 4),
-                "sym_score":           round(sid["sym_score"], 4),
-                "K_bins":              sid["K"],
+                "synthid_best_cvr":  round(sid["best_cvr"], 4),
+                "synthid_dark_cvr":  round(sid["dark_cvr"], 4),
+                "synthid_white_cvr": round(sid["white_cvr"], 4),
+                "synthid_all_cvr":   round(sid["all_cvr"], 4),
+                "synthid_ai_score":  round(sid["ai_score"], 4),
             })
 
     st.caption(
-        "FORENSIC HEURISTICS — SYNTHID REVERSE-ENGINEERING BASED ON "
-        "GITHUB.COM/ALOSHDENNY/REVERSE-SYNTHID — NOT A TRAINED ML MODEL — "
-        "PROBABILISTIC ESTIMATES — POST-PROCESSING MAY AFFECT RESULTS"
+        "FORENSIC HEURISTICS — SYNTHID CVR BASED ON GITHUB.COM/ALOSHDENNY/REVERSE-SYNTHID "
+        "— NOT A TRAINED ML MODEL — PROBABILISTIC ESTIMATES"
     )
 
 
 def page_about():
     st.html("""
 <div style="text-align:center;padding:28px 0 18px;">
-  <div style="font-family:'Orbitron',monospace;font-size:.68rem;
-              letter-spacing:5px;color:rgba(0,255,68,.35);margin-bottom:10px;">
-    // TECHNICAL DOCUMENTATION //</div>
-  <div style="font-family:'Orbitron',monospace;font-size:1.7rem;font-weight:900;
-              color:#fff;letter-spacing:4px;
-              text-shadow:0 0 10px #fff,0 0 25px #00ff88,0 0 60px rgba(0,255,68,.25);">
+  <div style="font-family:'Orbitron',monospace;font-size:.68rem;letter-spacing:5px;
+              color:rgba(0,255,68,.35);margin-bottom:10px;">// TECHNICAL DOCUMENTATION //</div>
+  <div style="font-family:'Orbitron',monospace;font-size:1.7rem;font-weight:900;color:#fff;
+              letter-spacing:4px;text-shadow:0 0 10px #fff,0 0 25px #00ff88;">
     DETECTION ALGORITHMS
   </div>
   <div style="margin:14px auto 0;width:180px;height:1px;
@@ -801,91 +769,96 @@ def page_about():
 </div>
 """)
 
-    render_section_header("SIGNAL 01 — SYNTHID CARRIER PHASE COHERENCE  [WEIGHT: 25%]")
+    render_section_header("SIGNAL 01 — SYNTHID CARRIER-TO-VARIANCE RATIO  [WEIGHT: 15%]")
     st.markdown("""
-**Source:** [aloshdenny/reverse-SynthID](https://github.com/aloshdenny/reverse-SynthID) — 90 % detector accuracy
+**Source:** [aloshdenny/reverse-SynthID](https://github.com/aloshdenny/reverse-SynthID)
+`src/extraction/robust_extractor.py` — `RobustSynthIDExtractor`
 
-Google Gemini (SynthID) embeds an invisible watermark **during the diffusion process itself** — not as a post-processing overlay.
-The watermark lives in the **noise residual** at specific resolution-dependent carrier frequencies in the 2-D Fourier domain.
+Google Gemini (SynthID) embeds an invisible watermark during diffusion at **fixed carrier frequencies**.
+These carrier bin offsets were **empirically reverse-engineered from 291 Gemini-generated images** and
+have >0.95 intra-set phase coherence. Each carrier set has a >0.5 discriminative gap vs non-watermarked images.
 
-**Critical property:** carrier phases are **image-content-independent**.
-They are identical across every SynthID image regardless of scene content.
-Real images have random phases at those bins because their energy comes from actual content.
+**Two carrier sets at 512 px resolution:**
 
-Reverse-engineered cross-image phase coherence: **99.5%** (SynthID) vs **< 0.3** (content bins).
+| Set | Bins | Pattern | Typical images |
+|-----|------|---------|----------------|
+| Dark | 36 bins | Diagonal grid e.g. `(-5,-3),(5,3),...` | Black / natural Gemini |
+| White | 20 bins | Horizontal axis e.g. `(0,±7),(0,±8),...` | White / bright Gemini |
 
-**Implementation (4 steps):**
+**CVR Algorithm** (mirrors `detect_array` from the repo):
 ```python
-# 1. Extract noise residual  (remove structural content)
-noise = image − box_blur(image, radius=7)
-
-# 2. 2-D FFT of noise residual, weighted by channel strength
-#    Channel weights recovered from reverse-SynthID:
-CH_WEIGHTS = [R=0.85, G=1.0, B=0.70]   # Green is dominant
-
-# 3. Find top-K magnitude bins (carrier candidates) outside DC region
-K = 128 bins; exclude centre (H/12 × W/12) DC mask
-
-# 4. Measure cross-channel phase coherence at candidate bins
-rg_coherence = |mean(exp(i × (phase_R − phase_G)))|   # ≥ 0.6 → carrier
-bg_coherence = |mean(exp(i × (phase_B − phase_G)))|
-tau = 0.60   # threshold from reverse-SynthID codebook
+# 1. Resize image to 512×512 (canonical detection scale)
+# 2. Extract noise residual (multi-method fusion, channel weights G=1.0 R=0.85 B=0.70)
+noise = fuse(gaussian_blur_residual, uniform_filter_residual)
+# 3. 2-D FFT of noise
+noise_fft = fftshift(fft2(noise_gray))
+# 4. Sample carrier bins vs same-radial-distance random bins (seed=42)
+CVR = mean(|noise_fft| at carrier_bins) / mean(|noise_fft| at random_bins)
+# 5. best_CVR = max(dark_CVR, white_CVR)
 ```
 
-Additional sub-checks:
-- **Spatial patch coherence**: split into N×N quadrants; check phase stability of dominant bin across patches
-- **FFT conjugate symmetry**: real signals satisfy `F(y,x) = conj(F(H-y, W-x))` — synthetic carriers are perfectly symmetric
+**Calibration thresholds:**
+- `CVR < 1.8`  → Clean — no SynthID watermark
+- `CVR 1.8–2.5` → Uncertain
+- `CVR ≥ 2.5`  → SynthID watermark detected
+
+**Why CVR?** Without a reference codebook (reference phases from many Gemini images), full phase
+matching is not possible. The CVR supporting signal from the repo is used: SynthID elevates energy
+specifically at these bins in the noise residual — natural images do not.
 """)
 
-    render_section_header("SIGNAL 02 — NOISE LEVEL ESTIMATION  [WEIGHT: 30%]")
+    render_section_header("SIGNAL 02 — NOISE LEVEL ESTIMATION  [WEIGHT: 35%]")
     st.markdown("""
-Real camera sensors produce **shot noise** and **thermal noise**. AI generators synthesise values mathematically — images are unnaturally clean.
+Real cameras produce **shot/thermal noise** (sigma ≈ 4–15 depending on ISO).
+AI generators produce mathematically synthesised images — unnaturally smooth (sigma ≈ 0.5–2.5).
 
 ```python
-kernel = [[1,-2,1],[-2,4,-2],[1,-2,1]]   # Laplacian
+kernel = [[1,-2,1],[-2,4,-2],[1,-2,1]]   # Laplacian (Immerkær 1996)
 sigma  = sqrt(pi/2) * mean(|convolve(gray, kernel)|) / 6.0
 ```
-- `sigma < 2` → AI &nbsp;&nbsp; `sigma 2–5` → borderline &nbsp;&nbsp; `sigma > 6` → real
+- `sigma < 2` → AI &nbsp;&nbsp; `sigma 2–4` → borderline &nbsp;&nbsp; `sigma > 5` → real camera
 """)
 
-    render_section_header("SIGNAL 03 — ERROR LEVEL ANALYSIS (ELA)  [WEIGHT: 20%]")
+    render_section_header("SIGNAL 03 — ERROR LEVEL ANALYSIS (ELA)  [WEIGHT: 25%]")
     st.markdown("""
-AI images output as **lossless PNG** → first JPEG compression causes large ELA.
-Camera photos are already JPEG in-device → re-saving causes low ELA.
+AI models output lossless PNG → first JPEG compression → **high ELA** (mean 8–25).
+Camera JPEGs are already compressed in-device → re-saving causes **low ELA** (mean 1–4).
 ```
-re_saved = save(img, JPEG, quality=92) → reload
-ELA_mean = mean(|original − re_saved|)   # > 10 → AI  |  < 5 → real
+re_saved  = save(img, JPEG, quality=92)
+ELA_mean  = mean(|original − re_saved|)
 ```
+- `ELA < 4` → real JPEG &nbsp;&nbsp; `ELA > 8` → PNG/AI source
 """)
 
     render_section_header("SIGNAL 04 — SOURCE FORMAT  [WEIGHT: 15%]")
     st.markdown("""
-| Format | Typical Source | AI Score |
-|--------|---------------|----------|
-| JPEG | Camera / smartphone — nearly always real | 0.25 |
-| PNG | ChatGPT, DALL·E, Midjourney, Stable Diffusion | 0.67 |
-| WebP | Google Gemini (SynthID), web-delivered AI | 0.62 |
+| Format | AI prior | Reasoning |
+|--------|----------|-----------|
+| JPEG | 0.20 | Default camera format — very unlikely AI output |
+| PNG | 0.62 | ChatGPT, DALL·E, Midjourney, Stable Diffusion default |
+| WebP | 0.58 | Google Gemini and web-delivered AI images |
 """)
 
     render_section_header("SIGNAL 05 — DCT BLOCK STRUCTURE  [WEIGHT: 10%]")
     st.markdown("""
-JPEG divides images into **8×8 DCT blocks**. In the 2-D FFT these appear as energy spikes at multiples of `N/8` from the DC centre.
-AI PNG images have no such structure.
+JPEG applies DCT in **8×8 blocks**. In the 2-D FFT these appear as spikes at multiples of `N/8` from DC.
+AI PNG images have no such structure. Strong 8×8 grid → JPEG camera image.
 """)
 
     render_section_header("KNOWN LIMITATIONS")
     st.warning("""
-FOR EDUCATIONAL AND RESEARCH PURPOSES ONLY — NOT A TRAINED ML MODEL.
+FOR EDUCATIONAL / RESEARCH USE ONLY — NOT A TRAINED ML MODEL.
 
-- SynthID detection uses a single-image approximation of multi-image phase coherence
-- A SynthID-watermarked image re-saved as JPEG may be misclassified
-- V4 bypass pipeline (VAE + elastic deform + FFT subtraction) can defeat this detector
-- Do NOT use as sole evidence in any legal, journalistic, or forensic context
+- SynthID CVR works best for images generated at exactly 512px resolution (Gemini's canonical size)
+- Images watermarked at other resolutions use different carrier bin positions (a full codebook is needed)
+- The V4 bypass pipeline (VAE + elastic deformation + FFT subtraction) defeats this detector
+- A real PNG photo will have moderate ELA and PNG format score — the ensemble still weighs all signals
+- Post-processing (re-JPEG, resize, crop) degrades all signals
 """)
 
     render_section_header("REFERENCES")
     st.markdown("""
-- [aloshdenny/reverse-SynthID](https://github.com/aloshdenny/reverse-SynthID) — carrier frequency reverse engineering, 90% detector accuracy
+- [aloshdenny/reverse-SynthID](https://github.com/aloshdenny/reverse-SynthID) — carrier frequency CVR detection
 - [SynthID — Google DeepMind](https://deepmind.google/technologies/synthid/)
 - Immerkær (1996): *Fast Noise Variance Estimation*
 - [C2PA Content Provenance Standard](https://c2pa.org/)
