@@ -1,0 +1,52 @@
+---
+
+Prompt:
+
+You are an expert full-stack Python developer and AI forensics specialist.
+
+Create a complete, beautiful, and easy-to-use single-file Streamlit web application called "AI Watermark Detector" (or "Is This AI?").
+
+The website must allow any user to upload a photo and instantly get a verdict: AI-generated or Real photo, with a confidence score, based on the invisible pixel-level watermark detection algorithm (SynthID-style / OpenAI-style).
+
+Core functionality:
+- Drag & drop or click to upload an image (JPG, PNG, WEBP supported, max 10 MB)
+- "Analyze Image" button
+- After analysis display:
+  - Original uploaded image
+  - Enhanced version (HSV saturation boost ×8) that makes the hidden watermark visible to humans
+  - Big, clear verdict with emoji:
+    - ⚠️ Likely AI-GENERATED (red/orange)
+    - ✅ Likely REAL photograph (green)
+  - Confidence score as a big percentage: "AI Probability: 94%"
+  - Short explanation of how the result was obtained
+  - Optional debug visuals: FFT magnitude spectrum and/or extracted watermark pattern
+
+Pages and navigation:
+- Home (main upload page)
+- About page explaining:
+  - How the detector works (template extraction + 2D FFT + phase coherence + spatial correlation)
+  - Which AI models it detects (Gemini/Imagen, DALL·E 3 / GPT Image, etc.)
+  - Limitations and disclaimer ("Not 100% accurate, for educational purposes")
+  - Technical overview of the algorithm
+- Simple top navigation bar
+- Clean, modern, trustworthy design (use nice colors, good typography, subtle gradients)
+
+Technical requirements:
+- Use only Streamlit, numpy, scipy, opencv-python, pillow
+- Include the full watermark detection algorithm inside the app (FFT-based frequency analysis, phase coherence, magnitude anomaly detection, saturation enhancement)
+- No database — completely stateless
+- Fast and efficient (cache the watermark template if possible)
+- Good error handling (invalid files, corrupted images, etc.)
+- Responsive design
+
+Deliverables:
+- Complete code for app.py (single file)
+- requirements.txt
+- Clear instructions at the top of the file:
+  - How to run locally (streamlit run app.py)
+  - How to deploy to Streamlit Community Cloud for free
+- Nice README section inside the code
+
+Make the UI professional, modern, and user-friendly — like a real product. Start your response directly with the full code for app.py.
+
+---
