@@ -30,7 +30,7 @@ outputType = "webview"
 [[workflows.workflow.tasks]]
 task = "shell.exec"
 args = "cd artifacts/ai-watermark-detector && streamlit run app.py"
-waitForPort = 8000
+waitForPort = 5000
 
 [agent]
 stack = "PNPM_WORKSPACE"

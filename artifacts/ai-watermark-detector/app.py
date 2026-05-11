@@ -1,6 +1,6 @@
 """
 AI Watermark Detector — "Is This AI?"
-Hacker / cryptography aesthetic edition.
+Hacker / cryptography aesthetic. Port 5000.
 """
 
 import streamlit as st
@@ -21,66 +21,39 @@ MAX_FILE_SIZE_MB = 10
 SUPPORTED_FORMATS = ["jpg", "jpeg", "png", "webp"]
 
 # ══════════════════════════════════════════════════════════════════════════════
-# HACKER DESIGN CSS
+# HACKER CSS  — injected once via st.html()
 # ══════════════════════════════════════════════════════════════════════════════
 HACKER_CSS = """
 <style>
 @import url('https://fonts.googleapis.com/css2?family=Share+Tech+Mono&family=Orbitron:wght@400;700;900&display=swap');
 
-/* ── Global reset ── */
 html, body, [class*="css"] {
     background-color: #000000 !important;
     color: #c8ffc8 !important;
     font-family: 'Share Tech Mono', 'Courier New', monospace !important;
 }
-
-/* ── Scanline overlay ── */
 body::before {
     content: "";
-    position: fixed;
-    top: 0; left: 0;
+    position: fixed; top: 0; left: 0;
     width: 100%; height: 100%;
     background: repeating-linear-gradient(
-        0deg,
-        transparent,
-        transparent 2px,
-        rgba(0,255,80,0.015) 2px,
-        rgba(0,255,80,0.015) 4px
+        0deg, transparent, transparent 2px,
+        rgba(0,255,80,0.012) 2px, rgba(0,255,80,0.012) 4px
     );
-    pointer-events: none;
-    z-index: 9999;
+    pointer-events: none; z-index: 9999;
 }
-
-/* ── Main container ── */
-section[data-testid="stMain"] > div {
-    background: #000 !important;
+.stApp, [data-testid="stAppViewContainer"] {
+    background: #000000 !important;
 }
-.stApp {
-    background: radial-gradient(ellipse at 20% 10%, #001a0a 0%, #000000 50%),
-                radial-gradient(ellipse at 80% 90%, #000d1a 0%, #000000 50%) !important;
-    background-color: #000 !important;
-}
-[data-testid="stAppViewContainer"] {
-    background: #000 !important;
-}
-[data-testid="stHeader"] {
-    background: transparent !important;
-}
-
-/* ── Sidebar ── */
-[data-testid="stSidebar"] {
-    background: #020a02 !important;
-    border-right: 1px solid #00ff4422 !important;
-}
-
-/* ── Tabs ── */
+[data-testid="stHeader"] { background: transparent !important; }
+section[data-testid="stMain"] > div { background: #000 !important; }
 [data-testid="stTabs"] button {
     color: #00cc55 !important;
     font-family: 'Share Tech Mono', monospace !important;
-    font-size: 0.95rem !important;
-    letter-spacing: 1px !important;
-    border-bottom: 2px solid transparent !important;
+    font-size: 0.9rem !important;
+    letter-spacing: 2px !important;
     background: transparent !important;
+    border-bottom: 2px solid transparent !important;
 }
 [data-testid="stTabs"] button[aria-selected="true"] {
     color: #00ff88 !important;
@@ -91,40 +64,19 @@ section[data-testid="stMain"] > div {
     border-bottom: 1px solid #00ff2222 !important;
     background: transparent !important;
 }
-
-/* ── File uploader ── */
 [data-testid="stFileUploader"] {
     border: 1px solid #00ff4433 !important;
-    border-radius: 4px !important;
     background: #000e04 !important;
     box-shadow: 0 0 20px #00ff441a, inset 0 0 30px #00ff440a !important;
 }
 [data-testid="stFileUploadDropzone"] {
     background: #000e04 !important;
     border: 2px dashed #00ff4455 !important;
-    border-radius: 4px !important;
 }
 [data-testid="stFileUploadDropzone"]:hover {
     border-color: #00ff88 !important;
     box-shadow: 0 0 25px #00ff4433 !important;
 }
-
-/* ── Buttons ── */
-.stButton > button {
-    background: transparent !important;
-    border: 1px solid #00ff88 !important;
-    color: #00ff88 !important;
-    font-family: 'Share Tech Mono', monospace !important;
-    letter-spacing: 2px !important;
-    text-transform: uppercase !important;
-    box-shadow: 0 0 10px #00ff4433, inset 0 0 10px #00ff4411 !important;
-}
-.stButton > button:hover {
-    box-shadow: 0 0 20px #00ff88, inset 0 0 15px #00ff4422 !important;
-    color: #ffffff !important;
-}
-
-/* ── Progress bars ── */
 [data-testid="stProgressBar"] > div {
     background: #001a0a !important;
     border: 1px solid #00ff4422 !important;
@@ -133,94 +85,25 @@ section[data-testid="stMain"] > div {
     background: linear-gradient(90deg, #005522, #00ff88) !important;
     box-shadow: 0 0 8px #00ff8888 !important;
 }
-
-/* ── Expander ── */
 [data-testid="stExpander"] {
     border: 1px solid #00ff2222 !important;
     background: #000a04 !important;
-    border-radius: 2px !important;
 }
-[data-testid="stExpander"]:hover {
-    border-color: #00ff4444 !important;
-    box-shadow: 0 0 15px #00ff2211 !important;
-}
-details summary {
-    color: #00ff88 !important;
-    font-family: 'Share Tech Mono', monospace !important;
-}
-
-/* ── Alerts / info boxes ── */
-[data-testid="stAlert"] {
-    border-radius: 2px !important;
-    font-family: 'Share Tech Mono', monospace !important;
-}
-.stAlert[data-baseweb="notification"] {
-    background: #000d04 !important;
-}
-
-/* ── Info ── */
-[data-testid="stAlert"][kind="info"],
-div[data-testid="stAlert"] {
-    background: #000d04 !important;
-    border-left: 3px solid #00ff88 !important;
-    box-shadow: 0 0 20px #00ff2211 !important;
-    color: #a0ffa0 !important;
-}
-
-/* ── Error / warning ── */
-div[data-baseweb="notification"][kind="negative"],
-div[role="alert"] {
-    background: #0d0000 !important;
-    border-left: 3px solid #ff2244 !important;
-}
-
-/* ── JSON display ── */
-[data-testid="stJson"] {
-    background: #000a04 !important;
-    border: 1px solid #00ff2222 !important;
-    font-family: 'Share Tech Mono', monospace !important;
-    color: #00ff88 !important;
-}
-
-/* ── Divider ── */
-hr {
-    border-color: #00ff2222 !important;
-    box-shadow: 0 0 8px #00ff2222 !important;
-}
-
-/* ── Spinner ── */
-[data-testid="stSpinner"] {
-    color: #00ff88 !important;
-}
-
-/* ── Caption ── */
-[data-testid="stCaptionContainer"] {
-    color: #446644 !important;
-    font-family: 'Share Tech Mono', monospace !important;
-    font-size: 0.75rem !important;
-}
-
-/* ── Headings ── */
-h1, h2, h3, h4 {
+details summary { color: #00ff88 !important; font-family: 'Share Tech Mono', monospace !important; }
+hr { border-color: #00ff2222 !important; box-shadow: 0 0 6px #00ff2211 !important; }
+h1, h2, h3 {
     font-family: 'Orbitron', 'Share Tech Mono', monospace !important;
-    color: #ffffff !important;
     text-shadow: 0 0 10px #00ff8877, 0 0 30px #00ff4433 !important;
     letter-spacing: 2px !important;
 }
+h1 { color: #ffffff !important; }
 h2 { color: #00ff88 !important; }
-h3 { color: #c0ffc0 !important; font-size: 1.1rem !important; }
-
-/* ── Markdown text ── */
-p, li, label {
-    color: #a0e8a0 !important;
-    font-family: 'Share Tech Mono', monospace !important;
-}
+h3 { color: #c0ffc0 !important; font-size: 1.05rem !important; }
+p, li { color: #a0e8a0 !important; font-family: 'Share Tech Mono', monospace !important; }
 strong { color: #00ff88 !important; }
 code {
-    background: #001a0a !important;
-    color: #00ff88 !important;
-    border: 1px solid #00ff2233 !important;
-    border-radius: 2px !important;
+    background: #001a0a !important; color: #00ff88 !important;
+    border: 1px solid #00ff2233 !important; border-radius: 2px !important;
     font-family: 'Share Tech Mono', monospace !important;
 }
 pre, .stCode {
@@ -229,40 +112,20 @@ pre, .stCode {
     border-left: 3px solid #00ff88 !important;
     box-shadow: 0 0 20px #00ff221a !important;
 }
-a { color: #00ff88 !important; text-decoration: none !important; }
+a { color: #00ff88 !important; }
 a:hover { text-shadow: 0 0 8px #00ff88 !important; }
-
-/* ── Table ── */
-table {
-    border-collapse: collapse !important;
-    font-family: 'Share Tech Mono', monospace !important;
-}
-th {
-    background: #001a08 !important;
-    color: #00ff88 !important;
-    border: 1px solid #00ff2233 !important;
-    padding: 6px 12px !important;
-}
-td {
-    border: 1px solid #00ff2222 !important;
-    color: #88cc88 !important;
-    padding: 5px 12px !important;
-}
+table { border-collapse: collapse !important; font-family: 'Share Tech Mono', monospace !important; }
+th { background: #001a08 !important; color: #00ff88 !important; border: 1px solid #00ff2233 !important; padding: 6px 12px !important; }
+td { border: 1px solid #00ff2222 !important; color: #88cc88 !important; padding: 5px 12px !important; }
 tr:hover td { background: #001008 !important; }
-
-/* ── Image captions ── */
-figcaption {
-    color: #447744 !important;
-    font-family: 'Share Tech Mono', monospace !important;
-    font-size: 0.75rem !important;
-    letter-spacing: 1px !important;
-}
+figcaption { color: #447744 !important; font-size: 0.75rem !important; letter-spacing: 1px !important; }
+[data-testid="stAlert"] { font-family: 'Share Tech Mono', monospace !important; }
+[data-testid="stCaptionContainer"] { color: #336633 !important; font-family: 'Share Tech Mono', monospace !important; font-size: 0.73rem !important; }
 </style>
 """
 
-
 # ══════════════════════════════════════════════════════════════════════════════
-# Detection Engine  (unchanged)
+# Detection Engine
 # ══════════════════════════════════════════════════════════════════════════════
 
 def enhance_saturation(img: Image.Image, factor: float = 8.0) -> Image.Image:
@@ -310,9 +173,9 @@ def analyze_ela(img: Image.Image) -> dict:
     ai_score = float(1.0 / (1.0 + np.exp(-0.5 * (ela_mean - 7.0))))
     return {
         "ela_mean": ela_mean,
-        "ela_std":  float(ela_map.std()),
-        "ela_max":  float(ela_map.max()),
-        "ela_map":  ela_map,
+        "ela_std": float(ela_map.std()),
+        "ela_max": float(ela_map.max()),
+        "ela_map": ela_map,
         "ai_score": float(np.clip(ai_score, 0, 1)),
     }
 
@@ -346,8 +209,8 @@ def detect_dct_blocks(magnitude: np.ndarray, img_size: tuple) -> dict:
         dct_strength = float(np.clip((avg_ratio - 1.0) / 6.0, 0, 1))
     return {
         "dct_strength": dct_strength,
-        "avg_ratio":    float(np.mean(peak_ratios)) if peak_ratios else 1.0,
-        "ai_score":     float(np.clip(1.0 - dct_strength, 0, 1)),
+        "avg_ratio": float(np.mean(peak_ratios)) if peak_ratios else 1.0,
+        "ai_score": float(np.clip(1.0 - dct_strength, 0, 1)),
     }
 
 
@@ -384,8 +247,8 @@ def analyze_image(img_bytes: bytes, mime_type: str) -> dict:
     img = Image.open(io.BytesIO(img_bytes)).convert("RGB")
     if max(img.size) > 1024:
         img.thumbnail((1024, 1024), Image.LANCZOS)
-    enhanced           = enhance_saturation(img, factor=8.0)
-    magnitude, log_mag = compute_fft_spectrum(img)
+    enhanced            = enhance_saturation(img, factor=8.0)
+    magnitude, log_mag  = compute_fft_spectrum(img)
     noise_res  = estimate_noise_level(img)
     ela_res    = analyze_ela(img)
     dct_res    = detect_dct_blocks(magnitude, img.size)
@@ -406,242 +269,191 @@ def fft_to_image(log_mag: np.ndarray) -> Image.Image:
 
 
 def ela_to_image(ela_map: np.ndarray) -> Image.Image:
-    clipped = np.clip(ela_map.mean(axis=2) if ela_map.ndim == 3 else ela_map, 0, 30)
+    ch = ela_map.mean(axis=2) if ela_map.ndim == 3 else ela_map
+    clipped = np.clip(ch, 0, 30)
     norm = (clipped / 30.0 * 255).astype(np.uint8)
     colored = np.stack([norm // 3, norm, norm // 4], axis=2).astype(np.uint8)
     return Image.fromarray(colored)
 
 
 # ══════════════════════════════════════════════════════════════════════════════
-# UI — Hacker Components
+# UI Components — using st.html() for isolated HTML blocks
 # ══════════════════════════════════════════════════════════════════════════════
 
-def glow_header():
-    st.markdown("""
-    <div style="
-        text-align: center;
-        padding: 36px 0 24px 0;
-        position: relative;
-    ">
-        <!-- background light blobs -->
-        <div style="
-            position: absolute; top: 0; left: 50%; transform: translateX(-50%);
-            width: 600px; height: 120px;
-            background: radial-gradient(ellipse, #00ff4411 0%, transparent 70%);
-            pointer-events: none;
-        "></div>
+def inject_css():
+    st.html(HACKER_CSS)
 
-        <div style="
-            font-family: 'Orbitron', monospace;
-            font-size: 0.75rem;
-            letter-spacing: 6px;
-            color: #00ff4488;
-            text-transform: uppercase;
-            margin-bottom: 10px;
-        ">// FORENSIC IMAGE ANALYSIS SYSTEM v2.1 //</div>
 
-        <div style="
-            font-family: 'Orbitron', monospace;
-            font-size: 2.4rem;
-            font-weight: 900;
-            color: #ffffff;
-            text-shadow:
-                0 0 7px #fff,
-                0 0 15px #fff,
-                0 0 30px #00ff88,
-                0 0 60px #00ff8866,
-                0 0 100px #00ff4433;
-            letter-spacing: 4px;
-            line-height: 1.15;
-            margin-bottom: 6px;
-        ">AI WATERMARK<br>DETECTOR</div>
+def render_hero():
+    st.html("""
+<div style="text-align:center;padding:32px 0 20px 0;position:relative;">
+  <div style="position:absolute;top:0;left:50%;transform:translateX(-50%);
+              width:500px;height:100px;
+              background:radial-gradient(ellipse,rgba(0,255,68,0.07) 0%,transparent 70%);
+              pointer-events:none;"></div>
+  <div style="font-family:'Orbitron','Share Tech Mono',monospace;
+              font-size:0.7rem;letter-spacing:6px;color:rgba(0,255,68,0.4);
+              text-transform:uppercase;margin-bottom:10px;">
+    // FORENSIC IMAGE ANALYSIS SYSTEM v2.1 //
+  </div>
+  <div style="font-family:'Orbitron','Share Tech Mono',monospace;
+              font-size:2.2rem;font-weight:900;color:#ffffff;
+              text-shadow:0 0 7px #fff,0 0 15px #fff,0 0 30px #00ff88,0 0 60px rgba(0,255,136,0.4);
+              letter-spacing:4px;line-height:1.2;margin-bottom:8px;">
+    AI WATERMARK<br>DETECTOR
+  </div>
+  <div style="font-family:'Share Tech Mono','Courier New',monospace;
+              font-size:0.82rem;color:#336633;letter-spacing:2px;margin-top:8px;">
+    [ NOISE &nbsp;&bull;&nbsp; ELA &nbsp;&bull;&nbsp; DCT &nbsp;&bull;&nbsp; FORMAT FORENSICS ]
+  </div>
+  <div style="margin:18px auto 0 auto;width:260px;height:1px;
+              background:linear-gradient(90deg,transparent,#00ff88,transparent);
+              box-shadow:0 0 8px #00ff88;"></div>
+</div>
+""")
 
-        <div style="
-            font-family: 'Share Tech Mono', monospace;
-            font-size: 0.9rem;
-            color: #448844;
-            letter-spacing: 2px;
-            margin-top: 10px;
-        ">[ NOISE · ELA · DCT · FORMAT FORENSICS ]</div>
 
-        <div style="
-            margin: 20px auto 0 auto;
-            width: 300px; height: 1px;
-            background: linear-gradient(90deg, transparent, #00ff88, transparent);
-            box-shadow: 0 0 10px #00ff88;
-        "></div>
-    </div>
-    """, unsafe_allow_html=True)
+def render_terminal_boot():
+    st.html("""
+<div style="font-family:'Share Tech Mono','Courier New',monospace;
+            color:#336633;font-size:0.76rem;letter-spacing:1px;
+            padding:4px 0 14px 0;line-height:1.9;">
+  &gt; INITIALIZING FORENSIC ENGINE... <span style="color:#00ff88;">OK</span><br>
+  &gt; LOADING FFT MODULE............. <span style="color:#00ff88;">OK</span><br>
+  &gt; ELA SUBSYSTEM READY............ <span style="color:#00ff88;">OK</span><br>
+  &gt; DCT BLOCK DETECTOR............. <span style="color:#00ff88;">OK</span><br>
+  &gt; AWAITING INPUT FILE<span style="color:#00ff88;">_</span>
+</div>
+""")
+
+
+def render_section_header(text: str):
+    st.html(f"""
+<div style="font-family:'Orbitron','Share Tech Mono',monospace;
+            font-size:0.78rem;letter-spacing:4px;color:#00ff88;
+            text-shadow:0 0 8px rgba(0,255,136,0.5);
+            text-transform:uppercase;padding:18px 0 8px 0;
+            border-bottom:1px solid rgba(0,255,34,0.15);">
+  // {text}
+</div>
+""")
+
+
+def render_drop_zone():
+    st.html("""
+<div style="border:1px solid rgba(0,255,34,0.2);border-radius:2px;
+            padding:48px 20px;text-align:center;
+            background:radial-gradient(ellipse at center,#001a0a 0%,#000000 70%);
+            box-shadow:0 0 30px rgba(0,255,26,0.04),inset 0 0 40px rgba(0,255,26,0.03);
+            margin-top:10px;font-family:'Share Tech Mono',monospace;position:relative;">
+  <div style="position:absolute;top:-1px;left:-1px;width:12px;height:12px;
+              border-top:2px solid #00ff88;border-left:2px solid #00ff88;
+              box-shadow:-2px -2px 8px #00ff88;"></div>
+  <div style="position:absolute;top:-1px;right:-1px;width:12px;height:12px;
+              border-top:2px solid #00ff88;border-right:2px solid #00ff88;
+              box-shadow:2px -2px 8px #00ff88;"></div>
+  <div style="position:absolute;bottom:-1px;left:-1px;width:12px;height:12px;
+              border-bottom:2px solid #00ff88;border-left:2px solid #00ff88;
+              box-shadow:-2px 2px 8px #00ff88;"></div>
+  <div style="position:absolute;bottom:-1px;right:-1px;width:12px;height:12px;
+              border-bottom:2px solid #00ff88;border-right:2px solid #00ff88;
+              box-shadow:2px 2px 8px #00ff88;"></div>
+  <div style="font-size:2.2rem;margin-bottom:12px;filter:drop-shadow(0 0 10px #00ff88);">&#128269;</div>
+  <div style="color:rgba(0,255,68,0.5);font-size:0.9rem;letter-spacing:2px;">AWAITING TARGET IMAGE</div>
+  <div style="color:#1a331a;font-size:0.73rem;margin-top:8px;letter-spacing:1px;">JPG &nbsp;&#xB7;&nbsp; PNG &nbsp;&#xB7;&nbsp; WEBP &nbsp;&#xB7;&nbsp; MAX 10 MB</div>
+</div>
+""")
 
 
 def render_verdict(probability: float, verdict: str):
     pct = int(probability * 100)
-
     if verdict == "likely_ai":
-        glow_color   = "#ff2244"
-        glow_color2  = "#ff000066"
-        label        = "⚠ SYNTHETIC ORIGIN DETECTED"
-        sub          = "HIGH CONFIDENCE — AI-GENERATED"
-        border_color = "#ff2244"
+        gc, gc2 = "#ff2244", "rgba(255,0,40,0.35)"
+        label = "WARNING — SYNTHETIC ORIGIN DETECTED"
+        sub   = "HIGH CONFIDENCE &nbsp;|&nbsp; AI-GENERATED"
     elif verdict == "likely_real":
-        glow_color   = "#00ff88"
-        glow_color2  = "#00ff4466"
-        label        = "✓ AUTHENTIC SIGNAL DETECTED"
-        sub          = "HIGH CONFIDENCE — REAL PHOTOGRAPH"
-        border_color = "#00ff88"
+        gc, gc2 = "#00ff88", "rgba(0,255,80,0.35)"
+        label = "AUTHENTIC SIGNAL DETECTED"
+        sub   = "HIGH CONFIDENCE &nbsp;|&nbsp; REAL PHOTOGRAPH"
     else:
-        glow_color   = "#ffaa00"
-        glow_color2  = "#ffaa0066"
-        label        = "~ SIGNAL AMBIGUOUS"
-        sub          = "INCONCLUSIVE — FURTHER ANALYSIS REQUIRED"
-        border_color = "#ffaa00"
+        gc, gc2 = "#ffaa00", "rgba(255,160,0,0.35)"
+        label = "SIGNAL AMBIGUOUS"
+        sub   = "INCONCLUSIVE &nbsp;|&nbsp; FURTHER ANALYSIS REQUIRED"
 
-    st.markdown(f"""
-    <div style="
-        background: radial-gradient(ellipse at center top, {glow_color}0a 0%, #000000 60%);
-        border: 1px solid {border_color}55;
-        border-radius: 2px;
-        padding: 36px 40px 30px 40px;
-        margin: 20px 0;
-        text-align: center;
-        position: relative;
-        box-shadow: 0 0 40px {glow_color}22, inset 0 0 60px {glow_color}08;
-        font-family: 'Share Tech Mono', monospace;
-    ">
-        <!-- corner accents -->
-        <div style="position:absolute;top:-1px;left:-1px;width:16px;height:16px;border-top:2px solid {glow_color};border-left:2px solid {glow_color};"></div>
-        <div style="position:absolute;top:-1px;right:-1px;width:16px;height:16px;border-top:2px solid {glow_color};border-right:2px solid {glow_color};"></div>
-        <div style="position:absolute;bottom:-1px;left:-1px;width:16px;height:16px;border-bottom:2px solid {glow_color};border-left:2px solid {glow_color};"></div>
-        <div style="position:absolute;bottom:-1px;right:-1px;width:16px;height:16px;border-bottom:2px solid {glow_color};border-right:2px solid {glow_color};"></div>
-
-        <!-- label -->
-        <div style="
-            font-size: 0.8rem;
-            letter-spacing: 4px;
-            color: {glow_color};
-            text-shadow: 0 0 8px {glow_color};
-            margin-bottom: 14px;
-        ">{label}</div>
-
-        <!-- big percentage -->
-        <div style="
-            font-family: 'Orbitron', monospace;
-            font-size: 5.5rem;
-            font-weight: 900;
-            color: #ffffff;
-            text-shadow:
-                0 0 7px #fff,
-                0 0 20px {glow_color},
-                0 0 50px {glow_color2};
-            line-height: 1;
-            margin-bottom: 8px;
-        ">{pct}<span style="font-size:2.5rem;opacity:0.7">%</span></div>
-
-        <!-- sub-label -->
-        <div style="
-            font-size: 0.7rem;
-            letter-spacing: 3px;
-            color: {glow_color}99;
-            margin-bottom: 20px;
-        ">AI PROBABILITY · {sub}</div>
-
-        <!-- progress bar -->
-        <div style="
-            background: #001008;
-            border: 1px solid {border_color}33;
-            border-radius: 1px;
-            height: 8px;
-            overflow: hidden;
-            box-shadow: inset 0 0 10px #000;
-        ">
-            <div style="
-                background: linear-gradient(90deg, {glow_color}44, {glow_color});
-                width: {pct}%;
-                height: 100%;
-                box-shadow: 0 0 12px {glow_color};
-            "></div>
-        </div>
-    </div>
-    """, unsafe_allow_html=True)
+    st.html(f"""
+<div style="background:radial-gradient(ellipse at center top,rgba({
+    '255,34,68' if verdict=='likely_ai' else '0,255,136' if verdict=='likely_real' else '255,170,0'
+},0.04) 0%,#000000 55%);
+            border:1px solid {gc}55;border-radius:2px;
+            padding:32px 36px 28px 36px;margin:16px 0;
+            text-align:center;position:relative;
+            box-shadow:0 0 40px {gc}18,inset 0 0 60px {gc}06;
+            font-family:'Share Tech Mono','Courier New',monospace;">
+  <div style="position:absolute;top:-1px;left:-1px;width:18px;height:18px;border-top:2px solid {gc};border-left:2px solid {gc};box-shadow:-2px -2px 10px {gc};"></div>
+  <div style="position:absolute;top:-1px;right:-1px;width:18px;height:18px;border-top:2px solid {gc};border-right:2px solid {gc};box-shadow:2px -2px 10px {gc};"></div>
+  <div style="position:absolute;bottom:-1px;left:-1px;width:18px;height:18px;border-bottom:2px solid {gc};border-left:2px solid {gc};box-shadow:-2px 2px 10px {gc};"></div>
+  <div style="position:absolute;bottom:-1px;right:-1px;width:18px;height:18px;border-bottom:2px solid {gc};border-right:2px solid {gc};box-shadow:2px 2px 10px {gc};"></div>
+  <div style="font-size:0.72rem;letter-spacing:4px;color:{gc};
+              text-shadow:0 0 8px {gc};margin-bottom:14px;">{label}</div>
+  <div style="font-family:'Orbitron','Share Tech Mono',monospace;
+              font-size:5rem;font-weight:900;color:#ffffff;
+              text-shadow:0 0 7px #fff,0 0 20px {gc},{gc2 if 'ai' not in verdict else '0 0 50px ' + gc2};
+              line-height:1;margin-bottom:8px;">
+    {pct}<span style="font-size:2.2rem;opacity:0.6;">%</span>
+  </div>
+  <div style="font-size:0.68rem;letter-spacing:3px;color:{gc}88;margin-bottom:20px;">
+    AI PROBABILITY &nbsp;&#xB7;&nbsp; {sub}
+  </div>
+  <div style="background:#001008;border:1px solid {gc}28;height:7px;overflow:hidden;border-radius:1px;">
+    <div style="background:linear-gradient(90deg,{gc}44,{gc});
+                width:{pct}%;height:100%;box-shadow:0 0 10px {gc};"></div>
+  </div>
+</div>
+""")
 
 
-def signal_card(label: str, score: float, detail: str, icon: str):
+def render_signal_card(label: str, score: float, detail: str, symbol: str):
     pct = int(score * 100)
     if pct > 62:
-        bar_color, txt_color = "#ff2244", "#ff4466"
+        bc, tc = "#ff2244", "#ff4466"
     elif pct < 38:
-        bar_color, txt_color = "#00ff88", "#00cc66"
+        bc, tc = "#00ff88", "#00cc66"
     else:
-        bar_color, txt_color = "#ffaa00", "#ffcc44"
+        bc, tc = "#ffaa00", "#ffcc44"
 
-    st.markdown(f"""
-    <div style="
-        border: 1px solid {bar_color}33;
-        border-left: 3px solid {bar_color};
-        background: radial-gradient(ellipse at left, {bar_color}08, transparent 60%);
-        padding: 12px 16px;
-        margin: 6px 0;
-        border-radius: 1px;
-        font-family: 'Share Tech Mono', monospace;
-        position: relative;
-    ">
-        <div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:6px;">
-            <span style="color:#a0e8a0; font-size:0.8rem; letter-spacing:1px;">{icon} {label}</span>
-            <span style="
-                color:{txt_color};
-                font-family:'Orbitron',monospace;
-                font-size:1rem;
-                font-weight:700;
-                text-shadow: 0 0 8px {bar_color};
-            ">{pct}%</span>
-        </div>
-        <div style="background:#001008; height:4px; border-radius:1px; overflow:hidden; margin-bottom:6px;">
-            <div style="background:linear-gradient(90deg,{bar_color}66,{bar_color});width:{pct}%;height:100%;box-shadow:0 0 8px {bar_color};"></div>
-        </div>
-        <div style="color:#446644; font-size:0.72rem; letter-spacing:0.5px;">{detail}</div>
-    </div>
-    """, unsafe_allow_html=True)
+    st.html(f"""
+<div style="border:1px solid {bc}2a;border-left:3px solid {bc};
+            background:linear-gradient(90deg,{bc}06 0%,transparent 50%);
+            padding:12px 16px;margin:6px 0;border-radius:1px;
+            font-family:'Share Tech Mono','Courier New',monospace;">
+  <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:6px;">
+    <span style="color:#a0e8a0;font-size:0.8rem;letter-spacing:1px;">{symbol} {label}</span>
+    <span style="color:{tc};font-family:'Orbitron',monospace;font-size:1rem;
+                 font-weight:700;text-shadow:0 0 8px {bc};">{pct}%</span>
+  </div>
+  <div style="background:#001008;height:4px;border-radius:1px;overflow:hidden;margin-bottom:6px;">
+    <div style="background:linear-gradient(90deg,{bc}66,{bc});
+                width:{pct}%;height:100%;box-shadow:0 0 8px {bc};"></div>
+  </div>
+  <div style="color:#446644;font-size:0.71rem;letter-spacing:0.5px;">{detail}</div>
+</div>
+""")
 
 
-def section_header(text: str):
-    st.markdown(f"""
-    <div style="
-        font-family: 'Orbitron', monospace;
-        font-size: 0.85rem;
-        letter-spacing: 4px;
-        color: #00ff88;
-        text-shadow: 0 0 8px #00ff8866;
-        text-transform: uppercase;
-        padding: 18px 0 8px 0;
-        border-bottom: 1px solid #00ff2222;
-    ">// {text}</div>
-    """, unsafe_allow_html=True)
-
-
-def drop_zone_placeholder():
-    st.markdown("""
-    <div style="
-        border: 1px solid #00ff2233;
-        border-radius: 2px;
-        padding: 50px 20px;
-        text-align: center;
-        background: radial-gradient(ellipse at center, #001a0a 0%, #000000 70%);
-        box-shadow: 0 0 30px #00ff1a0a, inset 0 0 40px #00ff1a05;
-        margin-top: 10px;
-        font-family: 'Share Tech Mono', monospace;
-        position: relative;
-    ">
-        <!-- corner lights -->
-        <div style="position:absolute;top:-1px;left:-1px;width:12px;height:12px;border-top:2px solid #00ff88;border-left:2px solid #00ff88;box-shadow:-2px -2px 8px #00ff88;"></div>
-        <div style="position:absolute;top:-1px;right:-1px;width:12px;height:12px;border-top:2px solid #00ff88;border-right:2px solid #00ff88;box-shadow:2px -2px 8px #00ff88;"></div>
-        <div style="position:absolute;bottom:-1px;left:-1px;width:12px;height:12px;border-bottom:2px solid #00ff88;border-left:2px solid #00ff88;box-shadow:-2px 2px 8px #00ff88;"></div>
-        <div style="position:absolute;bottom:-1px;right:-1px;width:12px;height:12px;border-bottom:2px solid #00ff88;border-right:2px solid #00ff88;box-shadow:2px 2px 8px #00ff88;"></div>
-
-        <div style="font-size:2.5rem;margin-bottom:12px;filter:drop-shadow(0 0 12px #00ff88);">🔍</div>
-        <div style="color:#00ff4488;font-size:0.95rem;letter-spacing:2px;">AWAITING TARGET IMAGE</div>
-        <div style="color:#224422;font-size:0.75rem;margin-top:8px;letter-spacing:1px;">JPG · PNG · WEBP · MAX 10 MB</div>
-    </div>
-    """, unsafe_allow_html=True)
+def render_log_block(lines: list, accent_color: str):
+    rows = ""
+    for i, line in enumerate(lines):
+        color = accent_color if i == len(lines) - 1 else "#336633"
+        rows += f'<div style="color:{color};">{line}</div>'
+    st.html(f"""
+<div style="background:#000a04;border:1px solid #00ff2218;
+            border-left:3px solid {accent_color};
+            padding:14px 18px;font-family:'Share Tech Mono','Courier New',monospace;
+            font-size:0.76rem;line-height:1.85;margin-top:14px;
+            box-shadow:0 0 20px {accent_color}0c;">
+  {rows}
+</div>
+""")
 
 
 # ══════════════════════════════════════════════════════════════════════════════
@@ -649,16 +461,8 @@ def drop_zone_placeholder():
 # ══════════════════════════════════════════════════════════════════════════════
 
 def page_home():
-    glow_header()
-
-    st.markdown("""
-    <div style="font-family:'Share Tech Mono',monospace;color:#336633;font-size:0.78rem;letter-spacing:1px;padding:4px 0 12px 0;">
-    &gt; INITIALIZING FORENSIC ENGINE... OK<br>
-    &gt; LOADING FFT MODULE... OK<br>
-    &gt; ELA SUBSYSTEM READY... OK<br>
-    &gt; AWAITING INPUT FILE_
-    </div>
-    """, unsafe_allow_html=True)
+    render_hero()
+    render_terminal_boot()
 
     uploaded_file = st.file_uploader(
         "UPLOAD TARGET IMAGE",
@@ -667,7 +471,7 @@ def page_home():
     )
 
     if uploaded_file is None:
-        drop_zone_placeholder()
+        render_drop_zone()
         return
 
     file_bytes = uploaded_file.read()
@@ -685,235 +489,189 @@ def page_home():
             return
 
     # ── Verdict ───────────────────────────────────────────────────────────────
-    section_header("VERDICT")
+    render_section_header("VERDICT")
     render_verdict(results["probability"], results["verdict"])
 
     # ── Visuals ───────────────────────────────────────────────────────────────
-    section_header("VISUAL FORENSICS")
+    render_section_header("VISUAL FORENSICS")
     col1, col2, col3, col4 = st.columns(4)
     with col1:
-        st.image(results["original"], caption="[ ORIGINAL ]", use_container_width=True)
+        st.image(results["original"],            caption="[ ORIGINAL ]",      use_container_width=True)
     with col2:
-        st.image(results["enhanced"], caption="[ SATURATION ×8 ]", use_container_width=True)
+        st.image(results["enhanced"],            caption="[ SATURATION x8 ]", use_container_width=True)
     with col3:
-        st.image(ela_to_image(results["ela_map"]), caption="[ ELA MAP ]", use_container_width=True)
+        st.image(ela_to_image(results["ela_map"]), caption="[ ELA MAP ]",       use_container_width=True)
     with col4:
-        st.image(fft_to_image(results["log_mag"]), caption="[ FFT SPECTRUM ]", use_container_width=True)
+        st.image(fft_to_image(results["log_mag"]), caption="[ FFT SPECTRUM ]",   use_container_width=True)
 
-    # ── Signal readout ────────────────────────────────────────────────────────
-    section_header("SIGNAL ANALYSIS")
+    # ── Signals ───────────────────────────────────────────────────────────────
+    render_section_header("SIGNAL ANALYSIS")
     noise_sig = results["noise"]["sigma"]
     ela_mean  = results["ela"]["ela_mean"]
     dct_str   = results["dct"]["dct_strength"]
     fmt_label = results["fmt"]["fmt_label"]
 
-    signal_card(
-        "NOISE LEVEL",
-        results["noise"]["ai_score"],
-        f"Laplacian sigma = {noise_sig:.2f} · "
-        + ("UNNATURALLY CLEAN — AI SIGNATURE" if noise_sig < 3 else
-           "NATURAL SENSOR NOISE — CAMERA ORIGIN" if noise_sig > 6 else
-           "BORDERLINE — AMBIGUOUS"),
-        "⚡",
+    render_signal_card(
+        "NOISE LEVEL", results["noise"]["ai_score"],
+        f"Laplacian sigma = {noise_sig:.2f}  |  " +
+        ("UNNATURALLY CLEAN — AI SIGNATURE" if noise_sig < 3
+         else "NATURAL SENSOR NOISE — CAMERA" if noise_sig > 6
+         else "BORDERLINE — AMBIGUOUS"),
+        "[!]",
     )
-    signal_card(
-        "ERROR LEVEL ANALYSIS",
-        results["ela"]["ai_score"],
-        f"Mean ELA = {ela_mean:.2f} · "
-        + ("HIGH — FIRST JPEG COMPRESSION → PNG/AI SOURCE" if ela_mean > 7 else
-           "LOW — PREVIOUSLY JPEG COMPRESSED → CAMERA SOURCE"),
-        "🗜",
+    render_signal_card(
+        "ERROR LEVEL ANALYSIS", results["ela"]["ai_score"],
+        f"Mean ELA = {ela_mean:.2f}  |  " +
+        ("HIGH — FIRST JPEG COMPRESSION — PNG/AI SOURCE" if ela_mean > 7
+         else "LOW — PREVIOUSLY JPEG COMPRESSED — CAMERA"),
+        "[~]",
     )
-    signal_card(
-        "SOURCE FORMAT",
-        results["fmt"]["ai_score"],
-        f"Detected: {fmt_label} · "
-        + ("PNG IS DEFAULT OUTPUT FORMAT FOR MOST AI GENERATORS" if fmt_label == "PNG" else
-           "WEBP USED BY GEMINI AND SOME AI PLATFORMS" if fmt_label == "WebP" else
-           "JPEG IS NATIVE CAMERA/SMARTPHONE FORMAT"),
-        "📄",
+    render_signal_card(
+        "SOURCE FORMAT", results["fmt"]["ai_score"],
+        f"Detected: {fmt_label}  |  " +
+        ("PNG IS DEFAULT OUTPUT FOR MOST AI GENERATORS" if fmt_label == "PNG"
+         else "WEBP USED BY GEMINI AND SOME AI PLATFORMS" if fmt_label == "WebP"
+         else "JPEG IS NATIVE CAMERA/SMARTPHONE FORMAT"),
+        "[F]",
     )
-    signal_card(
-        "DCT BLOCK STRUCTURE",
-        results["dct"]["ai_score"],
-        f"Block strength = {dct_str:.3f} · "
-        + ("STRONG 8×8 JPEG GRID → CAMERA JPEG" if dct_str > 0.5 else
-           "NO JPEG BLOCK PATTERN → LOSSLESS/AI SOURCE"),
-        "🔲",
+    render_signal_card(
+        "DCT BLOCK STRUCTURE", results["dct"]["ai_score"],
+        f"Block strength = {dct_str:.3f}  |  " +
+        ("STRONG 8x8 JPEG GRID — CAMERA JPEG" if dct_str > 0.5
+         else "NO JPEG BLOCK PATTERN — LOSSLESS/AI SOURCE"),
+        "[D]",
     )
 
-    # ── Analysis log ─────────────────────────────────────────────────────────
+    # ── Log ───────────────────────────────────────────────────────────────────
     verdict  = results["verdict"]
     prob     = results["probability"]
-
     if verdict == "likely_ai":
-        log_lines = [
-            f"[RESULT]  AI_PROBABILITY={int(prob*100)}%  STATUS=SYNTHETIC",
-            f"[NOISE]   sigma={noise_sig:.2f}  threshold=4.0  VERDICT={'AI_CLEAN' if noise_sig < 4 else 'BORDERLINE'}",
-            f"[ELA]     mean={ela_mean:.2f}  threshold=7.0  VERDICT={'PNG_SOURCE' if ela_mean > 7 else 'AMBIGUOUS'}",
-            f"[FORMAT]  type={fmt_label}  VERDICT={'AI_COMMON' if fmt_label != 'JPEG' else 'JPEG_PRIOR'}",
-            f"[DCT]     strength={dct_str:.3f}  VERDICT={'NO_JPEG_GRID' if dct_str < 0.4 else 'WEAK_GRID'}",
-            "[CONCLUSION]  HIGH PROBABILITY OF SYNTHETIC ORIGIN — AI WATERMARK DETECTED",
-        ]
         color = "#ff2244"
+        status = "SYNTHETIC"
+        conclusion = "HIGH PROBABILITY OF SYNTHETIC ORIGIN — AI WATERMARK DETECTED"
     elif verdict == "likely_real":
-        log_lines = [
-            f"[RESULT]  AI_PROBABILITY={int(prob*100)}%  STATUS=AUTHENTIC",
-            f"[NOISE]   sigma={noise_sig:.2f}  VERDICT={'NATURAL_NOISE' if noise_sig > 5 else 'LOW_NOISE'}",
-            f"[ELA]     mean={ela_mean:.2f}  VERDICT={'PREV_JPEG' if ela_mean < 7 else 'AMBIGUOUS'}",
-            f"[FORMAT]  type={fmt_label}  VERDICT={'CAMERA_FORMAT' if fmt_label == 'JPEG' else 'ATYPICAL'}",
-            f"[DCT]     strength={dct_str:.3f}  VERDICT={'JPEG_GRID_PRESENT' if dct_str > 0.4 else 'WEAK'}",
-            "[CONCLUSION]  SIGNALS CONSISTENT WITH REAL CAMERA PHOTOGRAPH",
-        ]
         color = "#00ff88"
+        status = "AUTHENTIC"
+        conclusion = "SIGNALS CONSISTENT WITH REAL CAMERA PHOTOGRAPH"
     else:
-        log_lines = [
-            f"[RESULT]  AI_PROBABILITY={int(prob*100)}%  STATUS=INCONCLUSIVE",
-            f"[NOISE]   sigma={noise_sig:.2f}",
-            f"[ELA]     mean={ela_mean:.2f}",
-            f"[FORMAT]  type={fmt_label}",
-            f"[DCT]     strength={dct_str:.3f}",
-            "[CONCLUSION]  SIGNALS CONFLICT — POSSIBLE POST-PROCESSING OR RE-ENCODING",
-        ]
         color = "#ffaa00"
+        status = "INCONCLUSIVE"
+        conclusion = "SIGNALS CONFLICT — POSSIBLE POST-PROCESSING OR RE-ENCODING"
 
-    lines_html = "<br>".join(
-        f'<span style="color:{color if i == len(log_lines)-1 else "#336633"}">{line}</span>'
-        for i, line in enumerate(log_lines)
-    )
-    st.markdown(f"""
-    <div style="
-        background: #000a04;
-        border: 1px solid #00ff2222;
-        border-left: 3px solid {color};
-        padding: 16px 20px;
-        font-family: 'Share Tech Mono', monospace;
-        font-size: 0.78rem;
-        line-height: 1.9;
-        margin-top: 16px;
-        box-shadow: 0 0 20px {color}11;
-    ">{lines_html}</div>
-    """, unsafe_allow_html=True)
+    render_log_block([
+        f"[RESULT]  AI_PROBABILITY={int(prob*100)}%  STATUS={status}",
+        f"[NOISE]   sigma={noise_sig:.2f}  threshold=4.0",
+        f"[ELA]     mean={ela_mean:.2f}  threshold=7.0",
+        f"[FORMAT]  type={fmt_label}",
+        f"[DCT]     strength={dct_str:.3f}",
+        f"[CONCLUSION]  {conclusion}",
+    ], color)
 
-    # ── Raw data expander ─────────────────────────────────────────────────────
+    # ── Raw data ──────────────────────────────────────────────────────────────
     with st.expander("[ RAW FORENSIC DATA ]"):
         c1, c2 = st.columns(2)
         with c1:
             st.json({"noise_sigma": round(noise_sig, 4), "noise_ai_score": round(results["noise"]["ai_score"], 4)})
-            st.json({"dct_strength": round(dct_str, 4), "dct_avg_ratio": round(results["dct"]["avg_ratio"], 4)})
+            st.json({"dct_strength": round(dct_str, 4), "avg_ratio": round(results["dct"]["avg_ratio"], 4)})
         with c2:
             st.json({"ela_mean": round(ela_mean, 4), "ela_std": round(results["ela"]["ela_std"], 4)})
             st.json({"format": fmt_label, "fmt_ai_score": round(results["fmt"]["ai_score"], 4)})
 
-    st.markdown("""
-    <div style="font-family:'Share Tech Mono',monospace;color:#224422;font-size:0.72rem;
-                letter-spacing:1px;margin-top:20px;border-top:1px solid #00ff2211;padding-top:10px;">
-    ⚠ FORENSIC HEURISTICS ONLY — NOT A TRAINED ML MODEL — PROBABILISTIC ESTIMATES —
-    POST-PROCESSING MAY AFFECT RESULTS — NOT FOR LEGAL OR FORENSIC USE
-    </div>
-    """, unsafe_allow_html=True)
+    st.caption(
+        "FORENSIC HEURISTICS ONLY — NOT A TRAINED ML MODEL — "
+        "PROBABILISTIC ESTIMATES — POST-PROCESSING MAY AFFECT RESULTS"
+    )
 
 
 def page_about():
-    st.markdown("""
-    <div style="
-        text-align:center;
-        padding:30px 0 20px 0;
-        font-family:'Orbitron',monospace;
-    ">
-        <div style="color:#00ff4466;font-size:0.7rem;letter-spacing:5px;margin-bottom:10px;">// TECHNICAL DOCUMENTATION //</div>
-        <div style="
-            font-size:1.8rem; font-weight:900; color:#fff;
-            text-shadow: 0 0 10px #fff, 0 0 25px #00ff88, 0 0 60px #00ff4433;
-            letter-spacing:4px;
-        ">DETECTION ALGORITHMS</div>
-        <div style="margin:16px auto 0;width:200px;height:1px;
-                    background:linear-gradient(90deg,transparent,#00ff88,transparent);
-                    box-shadow:0 0 8px #00ff88;"></div>
-    </div>
-    """, unsafe_allow_html=True)
+    st.html("""
+<div style="text-align:center;padding:28px 0 18px 0;">
+  <div style="font-family:'Orbitron',monospace;font-size:0.68rem;
+              letter-spacing:5px;color:rgba(0,255,68,0.35);margin-bottom:10px;">
+    // TECHNICAL DOCUMENTATION //
+  </div>
+  <div style="font-family:'Orbitron',monospace;font-size:1.7rem;font-weight:900;
+              color:#ffffff;letter-spacing:4px;
+              text-shadow:0 0 10px #fff,0 0 25px #00ff88,0 0 60px rgba(0,255,68,0.25);">
+    DETECTION ALGORITHMS
+  </div>
+  <div style="margin:14px auto 0;width:180px;height:1px;
+              background:linear-gradient(90deg,transparent,#00ff88,transparent);
+              box-shadow:0 0 8px #00ff88;"></div>
+</div>
+""")
 
-    section_header("SIGNAL 01 — NOISE LEVEL ESTIMATION  [WEIGHT: 40%]")
+    render_section_header("SIGNAL 01 — NOISE LEVEL ESTIMATION  [WEIGHT: 40%]")
     st.markdown("""
 Real camera sensors produce **shot noise** and **thermal noise** proportional to ISO.
-This generates measurable pixel-level randomness — σ = 2–20 depending on camera/lighting.
+This creates measurable pixel-level randomness — sigma = 2–20 depending on camera/lighting.
 
-AI generators synthesise values mathematically, producing images that are
-**unnaturally clean** (σ < 2) — lacking real sensor noise entirely.
+AI generators synthesise values mathematically — images are **unnaturally clean** (sigma < 2).
 
-**Algorithm:** Laplacian-based noise estimator (Immerkær 1996)
+**Algorithm** (Laplacian noise estimator, Immerkær 1996):
 ```
 kernel = [[1,-2,1],[-2,4,-2],[1,-2,1]]
 sigma  = sqrt(pi/2) * mean(|Laplacian(gray)|) / 6.0
 ```
-- `sigma < 2`  →  very likely AI
-- `sigma 2–5`  →  borderline
-- `sigma > 6`  →  likely real camera photo
-    """)
+- `sigma < 2`  — very likely AI
+- `sigma 2–5`  — borderline
+- `sigma > 6`  — likely real camera photo
+""")
 
-    section_header("SIGNAL 02 — ERROR LEVEL ANALYSIS (ELA)  [WEIGHT: 25%]")
+    render_section_header("SIGNAL 02 — ERROR LEVEL ANALYSIS (ELA)  [WEIGHT: 25%]")
     st.markdown("""
-JPEG compression is **lossy**. Re-compressing an already-JPEG image causes
-minimal further loss. First-time JPEG compression of a **lossless PNG** causes large error.
+JPEG compression is **lossy**. Re-compressing an already-JPEG image causes minimal further loss.
+First-time JPEG compression of a **lossless PNG** causes large error.
 
-Real camera photos → JPEG in-camera → **low ELA** when re-saved.
-AI images (ChatGPT, DALL·E, Midjourney) → PNG output → **high ELA** when saved as JPEG.
+Real camera photos → JPEG in-camera → **low ELA**. AI images → PNG output → **high ELA**.
 
-**Algorithm:**
 ```
-re_saved = img.save(JPEG, quality=92) → reload
+re_saved = save(img, JPEG, quality=92) → reload
 ELA_map  = abs(original - re_saved)
 ela_mean = ELA_map.mean()
 ```
-- `ela_mean < 5`  →  was already JPEG → likely real
-- `ela_mean > 10` →  first JPEG compression → likely AI PNG source
-    """)
+- `ela_mean < 5`  — was already JPEG → likely real
+- `ela_mean > 10` — first JPEG compression → likely AI PNG
+""")
 
-    section_header("SIGNAL 03 — SOURCE FORMAT HEURISTIC  [WEIGHT: 20%]")
+    render_section_header("SIGNAL 03 — SOURCE FORMAT  [WEIGHT: 20%]")
     st.markdown("""
-File format is a strong empirical prior:
-
 | Format | Typical Source | AI Score Prior |
 |--------|---------------|----------------|
 | JPEG | Camera phones, DSLRs — almost always real | 0.25 |
 | PNG | ChatGPT, DALL·E, Midjourney, Stable Diffusion | 0.65 |
 | WebP | Google Gemini, web-delivered AI images | 0.60 |
+""")
 
-This is a **prior** — overridden by the other signals when they strongly disagree.
-    """)
-
-    section_header("SIGNAL 04 — DCT BLOCK DETECTION  [WEIGHT: 15%]")
+    render_section_header("SIGNAL 04 — DCT BLOCK DETECTION  [WEIGHT: 15%]")
     st.markdown("""
 JPEG divides images into **8×8 pixel blocks** with DCT applied to each.
-In the 2D FFT magnitude spectrum, these blocks create energy spikes at
-multiples of (image_dim / 8) from the DC center.
+In the 2D FFT magnitude spectrum these appear as energy spikes at multiples of `(N/8)` from center.
 
 AI PNG images have **no such 8×8 structure**.
 
-**Algorithm:** Measure energy ratio at expected DCT spike positions vs local background.
-- `ratio > 3×`  →  strong JPEG grid → likely real camera JPEG
-- `ratio ≈ 1×`  →  no grid → possibly AI PNG
-    """)
+- `peak ratio > 3x`  — strong JPEG grid → likely camera JPEG
+- `peak ratio ~ 1x`  — no grid → possibly AI PNG
+""")
 
-    section_header("KNOWN LIMITATIONS")
+    render_section_header("KNOWN LIMITATIONS")
     st.warning("""
 FOR EDUCATIONAL AND RESEARCH PURPOSES ONLY.
 
-- AI image re-saved as JPEG loses the PNG fingerprint — may be misclassified as real
-- Real photo exported as PNG (editor, screenshot) may be misclassified as AI
+- AI image re-saved as JPEG loses the PNG fingerprint and may be misclassified as real
+- Real photo exported as PNG may be misclassified as AI
 - Heavily post-processed or filtered images degrade all signals
-- Very small images (< 200px) give unreliable results
-- Not trained on a labeled dataset — all calibration is empirical/heuristic
-- Do NOT use as sole evidence in legal, journalistic, or forensic contexts
-    """)
+- Not a trained ML model — calibration is empirical/heuristic
+- Do NOT use as sole evidence in any legal, journalistic, or forensic context
+""")
 
-    section_header("REFERENCES")
+    render_section_header("REFERENCES")
     st.markdown("""
-- Immerkær (1996): *Fast Noise Variance Estimation*, Computer Vision and Image Understanding
+- Immerkær (1996): *Fast Noise Variance Estimation* — Computer Vision and Image Understanding
 - [SynthID — Google DeepMind](https://deepmind.google/technologies/synthid/)
 - [C2PA Content Provenance Standard](https://c2pa.org/)
 - [Error Level Analysis — Forensically](https://29a.ch/photo-forensics/#error-level-analysis)
-    """)
+""")
 
 
 # ══════════════════════════════════════════════════════════════════════════════
@@ -921,8 +679,8 @@ FOR EDUCATIONAL AND RESEARCH PURPOSES ONLY.
 # ══════════════════════════════════════════════════════════════════════════════
 
 def main():
-    st.markdown(HACKER_CSS, unsafe_allow_html=True)
-    tabs = st.tabs(["  DETECTOR  ", "  ABOUT & ALGORITHMS  "])
+    inject_css()
+    tabs = st.tabs(["  DETECTOR  ", "  ALGORITHMS  "])
     with tabs[0]:
         page_home()
     with tabs[1]:

@@ -1,0 +1,13 @@
+kind = "web"
+previewPath = "/"
+title = "AI Watermark Detector"
+version = "1.0.0"
+id = "ai-watermark-5001"
+
+[[services]]
+localPort = 5000
+name = "AI Watermark Detector"
+paths = ["/"]
+
+[services.development]
+run = "cd /home/runner/workspace/artifacts/ai-watermark-detector && streamlit run app.py"
