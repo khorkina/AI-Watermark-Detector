@@ -24,13 +24,13 @@ args = "AI Watermark Detector"
 name = "AI Watermark Detector"
 author = "agent"
 
+[workflows.workflow.metadata]
+outputType = "webview"
+
 [[workflows.workflow.tasks]]
 task = "shell.exec"
 args = "cd artifacts/ai-watermark-detector && streamlit run app.py"
-waitForPort = 5000
-
-[workflows.workflow.metadata]
-outputType = "webview"
+waitForPort = 8000
 
 [agent]
 stack = "PNPM_WORKSPACE"
@@ -47,3 +47,15 @@ packages = ["freetype", "lcms2", "libGL", "libGLU", "libimagequant", "libjpeg", 
 [[ports]]
 localPort = 5000
 externalPort = 80
+
+[[ports]]
+localPort = 8000
+externalPort = 8000
+
+[[ports]]
+localPort = 8080
+externalPort = 8080
+
+[[ports]]
+localPort = 8081
+externalPort = 8081
